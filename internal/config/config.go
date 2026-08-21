@@ -24,6 +24,8 @@ type Config struct {
 	WorkerCount   int // 并发 worker 数量
 	QueueCapacity int // 内存任务队列容量
 
+	ResultCacheCapacity int // 分析结果 LRU 缓存容量
+
 	// HTTP 服务器超时控制。
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
@@ -48,6 +50,7 @@ func Default() *Config {
 		TextRankDamping:     0.85,
 		WorkerCount:         4,
 		QueueCapacity:       256,
+		ResultCacheCapacity: 128,
 		ReadTimeout:         10 * time.Second,
 		WriteTimeout:        30 * time.Second,
 		IdleTimeout:         60 * time.Second,
@@ -72,6 +75,9 @@ func (c *Config) Validate() error {
 	}
 	if c.QueueCapacity <= 0 {
 		return fmt.Errorf("config: queue capacity must be positive")
+	}
+	if c.ResultCacheCapacity <= 0 {
+		return fmt.Errorf("config: result cache capacity must be positive")
 	}
 	if c.TextRankMaxIter <= 0 {
 		return fmt.Errorf("config: textrank max iter must be positive")

@@ -5,36 +5,39 @@ import (
 	"strings"
 	"time"
 
+	"summarizer/internal/cache"
 	"summarizer/internal/metrics"
 	"summarizer/internal/model"
 	"summarizer/internal/store"
 	"summarizer/pkg/logger"
 )
 
-// ArticleService 处理单篇文章的提交、查询与历史列表。
 type ArticleService struct {
 	articles store.ArticleStore
 	results  store.ResultStore
 	analyzer *Analyzer
 	ids      *store.IDGenerator
+	rc       *cache.ResultCache
 	maxLen   int
 }
 
-// NewArticleService 构造 ArticleService。
-func NewArticleService(articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, maxLen int) *ArticleService {
+func NewArticleService(articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, rc *cache.ResultCache, maxLen int) *ArticleService {
 	if maxLen <= 0 {
 		maxLen = 100000
+	}
+	if rc == nil {
+		rc = cache.NewResultCache(128)
 	}
 	return &ArticleService{
 		articles: articles,
 		results:  results,
 		analyzer: analyzer,
 		ids:      ids,
+		rc:       rc,
 		maxLen:   maxLen,
 	}
 }
 
-// Submit 提交单篇文章并同步完成分析，返回完整分析响应。
 func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequest) (*model.AnalyzeResponse, error) {
 	if err := s.validate(req); err != nil {
 		return nil, err
@@ -65,6 +68,8 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	if err := s.results.SaveResult(ctx, result); err != nil {
 		return nil, err
 	}
+	s.rc.DirtyPut(result)
+
 	article.Status = model.ArticleReady
 	article.UpdatedAt = time.Now()
 	_ = s.articles.UpdateArticle(ctx, article)
@@ -87,27 +92,73 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	}, nil
 }
 
-// Get 查询单篇文章详情。
 func (s *ArticleService) Get(ctx context.Context, id string) (*model.Article, error) {
 	return s.articles.GetArticle(ctx, id)
 }
 
-// List 分页查询文章历史记录。
 func (s *ArticleService) List(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
 	return s.articles.ListArticles(ctx, offset, limit)
 }
 
-// GetResult 查询某篇文章的分析结果。
 func (s *ArticleService) GetResult(ctx context.Context, id string) (*model.AnalysisResult, error) {
-	return s.results.GetResult(ctx, id)
+	if cached, ok := s.rc.Get(id); ok {
+		return cached, nil
+	}
+	r, err := s.results.GetResult(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.rc.DirtyPut(r)
+	return r, nil
 }
 
-// ListResults 分页查询分析结果历史。
 func (s *ArticleService) ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error) {
-	return s.results.ListResults(ctx, offset, limit)
+	items, total, err := s.results.ListResults(ctx, offset, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, it := range items {
+		if it != nil {
+			s.rc.DirtyPut(it)
+		}
+	}
+	return items, total, nil
 }
 
-// validate 校验单篇提交请求的合法性。
+func (s *ArticleService) Refresh(ctx context.Context, id string, extraKeywords []model.Keyword) (*model.AnalysisResult, error) {
+	a, err := s.articles.GetArticle(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	_ = a
+	existing, err := s.results.GetResult(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if len(extraKeywords) > 0 {
+		merged := append(existing.Keywords, extraKeywords...)
+		seen := make(map[string]struct{}, len(merged))
+		dedup := make([]model.Keyword, 0, len(merged))
+		for _, k := range merged {
+			if _, ok := seen[k.Word]; ok {
+				continue
+			}
+			seen[k.Word] = struct{}{}
+			dedup = append(dedup, k)
+		}
+		existing.Keywords = dedup
+	}
+	existing.Summary = existing.Summary + " [refreshed]"
+	if err := s.results.SaveResult(ctx, existing); err != nil {
+		return nil, err
+	}
+	s.rc.RefreshEntry(id, func(r *model.AnalysisResult) {
+		r.Keywords = existing.Keywords
+		r.Summary = existing.Summary
+	})
+	return existing, nil
+}
+
 func (s *ArticleService) validate(req model.SubmitArticleRequest) error {
 	if strings.TrimSpace(req.Content) == "" {
 		return model.ErrEmptyContent

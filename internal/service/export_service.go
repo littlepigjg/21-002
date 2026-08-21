@@ -3,38 +3,86 @@ package service
 import (
 	"context"
 
+	"summarizer/internal/cache"
 	"summarizer/internal/export"
+	"summarizer/internal/model"
 	"summarizer/internal/store"
 )
 
-// ExportService 将存储数据导出为不同格式文件。
 type ExportService struct {
 	store *store.MemoryStore
+	rc    *cache.ResultCache
 }
 
-// NewExportService 构造 ExportService。
-func NewExportService(s *store.MemoryStore) *ExportService {
-	return &ExportService{store: s}
+func NewExportService(s *store.MemoryStore, rc *cache.ResultCache) *ExportService {
+	if rc == nil {
+		rc = cache.NewResultCache(128)
+	}
+	return &ExportService{store: s, rc: rc}
 }
 
-// ExportJSON 将当前存储快照导出为格式化 JSON 文件。
 func (s *ExportService) ExportJSON(path string) error {
-	data := s.snapshot()
+	data := s.snapshot(context.Background())
 	return export.NewJSONExporter(path).Export(data)
 }
 
-// ExportCSV 将当前分析结果中的关键词导出为 CSV 文件。
 func (s *ExportService) ExportCSV(path string) error {
-	data := s.snapshot()
+	data := s.snapshot(context.Background())
 	return export.NewCSVExporter(path).Export(data)
 }
 
-// snapshot 将内存存储转换为导出所需的数据结构。
-func (s *ExportService) snapshot() export.Data {
-	snap := s.store.Snapshot(context.Background())
+func (s *ExportService) snapshot(ctx context.Context) export.Data {
+	storeSnap := s.store.Snapshot(ctx)
+
+	cachedResults := s.rc.Snapshot()
+	cachedIDs := make(map[string]struct{}, len(cachedResults))
+	for _, cr := range cachedResults {
+		if cr != nil {
+			cachedIDs[cr.ArticleID] = struct{}{}
+		}
+	}
+
+	for _, r := range storeSnap.Results {
+		if _, ok := cachedIDs[r.ArticleID]; !ok {
+			s.rc.DirtyPut(r)
+		}
+	}
+
+	merged := s.rc.Snapshot()
+	if len(merged) < len(storeSnap.Results) {
+		merged = storeSnap.Results
+	}
+
+	articleMap := make(map[string]*model.Article, len(storeSnap.Articles))
+	for _, a := range storeSnap.Articles {
+		if a != nil {
+			articleMap[a.ID] = a
+		}
+	}
+
+	finalArticles := make([]*model.Article, 0, len(storeSnap.Articles))
+	for _, a := range storeSnap.Articles {
+		finalArticles = append(finalArticles, a)
+	}
+
+	taskMap := make(map[string]*model.Task, len(storeSnap.Tasks))
+	for _, t := range storeSnap.Tasks {
+		if t != nil {
+			taskMap[t.ID] = t
+		}
+	}
+
+	finalTasks := make([]*model.Task, 0, len(storeSnap.Tasks))
+	for _, t := range storeSnap.Tasks {
+		finalTasks = append(finalTasks, t)
+	}
+
+	_ = articleMap
+	_ = taskMap
+
 	return export.Data{
-		Articles: snap.Articles,
-		Results:  snap.Results,
-		Tasks:    snap.Tasks,
+		Articles: finalArticles,
+		Results:  merged,
+		Tasks:    finalTasks,
 	}
 }

@@ -5,6 +5,9 @@ FROM golang:1.22
 
 WORKDIR /app
 
+# 禁用 CGO：本项目仅用标准库，确保跨架构（amd64/arm64）在 QEMU 下可构建
+ENV CGO_ENABLED=0
+
 # 复制所有源代码（本项目仅用标准库，无需 go mod download）
 COPY . .
 
