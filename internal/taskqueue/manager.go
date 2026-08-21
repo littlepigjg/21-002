@@ -2,7 +2,10 @@ package taskqueue
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
+
+	"summarizer/pkg/logger"
 )
 
 // Handler 处理单个 Job。返回值表示任务是否执行成功。
@@ -54,9 +57,23 @@ func (m *Manager) worker(ctx context.Context, id int) {
 		case <-m.queue.Done():
 			return
 		case j := <-m.queue.Jobs():
-			_ = m.handler(ctx, j)
+			m.runJob(ctx, j)
 		}
 	}
+}
+
+// runJob 执行单个 Job，捕获 panic 防止单个任务异常拖垮整个 worker。
+func (m *Manager) runJob(ctx context.Context, j Job) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.Error("worker panic recovered",
+				"task_id", j.ID,
+				"panic", rec,
+				"stack", string(debug.Stack()),
+			)
+		}
+	}()
+	_ = m.handler(ctx, j)
 }
 
 // Wait 阻塞直到所有 worker 退出。

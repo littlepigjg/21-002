@@ -82,12 +82,16 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 }
 
 func buildResponse(id string, req model.SubmitArticleRequest, result *model.AnalysisResult) *model.AnalyzeResponse {
-	topKeyword := result.Keywords[0]
-	logger.Info("top keyword",
-		"article_id", id,
-		"keyword", topKeyword.Word,
-		"score", topKeyword.Score,
-	)
+	if len(result.Keywords) > 0 {
+		topKeyword := result.Keywords[0]
+		logger.Info("top keyword",
+			"article_id", id,
+			"keyword", topKeyword.Word,
+			"score", topKeyword.Score,
+		)
+	} else {
+		logger.Info("no keywords extracted", "article_id", id)
+	}
 	return &model.AnalyzeResponse{
 		ArticleID:  id,
 		Title:      req.Title,

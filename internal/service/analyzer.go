@@ -56,10 +56,12 @@ func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*mod
 }
 
 func computeAverageTokenLength(sentences []model.Sentence) float64 {
+	if len(sentences) == 0 {
+		return 0
+	}
 	total := 0
 	count := 0
-	first := sentences[0]
-	for _, tok := range first.Tokens {
+	for _, tok := range sentences[0].Tokens {
 		total += len(tok)
 		count++
 	}
