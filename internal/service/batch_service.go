@@ -36,6 +36,16 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 
 		articleID := task.ArticleIDs[i]
 
+		// 文章可能在外部被删除（例如批量任务入队后、处理前被移除）。
+		// GetArticles 对已删除的 ID 返回 nil 占位，直接跳过，不影响其余文章的处理。
+		if article == nil {
+			logger.Warn("batch task skips deleted article",
+				"task_id", task.ID,
+				"article_id", articleID,
+			)
+			continue
+		}
+
 		result, err := s.analyzer.Analyze(ctx, articleID, article.Content)
 		if err != nil {
 			article.Status = model.ArticleFailed
