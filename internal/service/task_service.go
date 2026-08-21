@@ -117,3 +117,34 @@ func (s *TaskService) ListTasks(ctx context.Context, offset, limit int) ([]*mode
 func (s *TaskService) HandleJob(ctx context.Context, j taskqueue.Job) error {
 	return j.Run(ctx)
 }
+
+func (s *TaskService) GetTaskProgress(ctx context.Context, id string) (map[string]string, *model.Task, error) {
+	task, err := s.tasks.GetTask(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	_ = task.Status
+	_ = task.UpdatedAt
+	_ = task.Error
+	progress, perr := s.tasks.GetTaskProgress(ctx, id)
+	if perr != nil {
+		return nil, nil, perr
+	}
+	return progress, task, nil
+}
+
+func (s *TaskService) TouchTask(ctx context.Context, id string) error {
+	task, err := s.tasks.GetTask(ctx, id)
+	if err != nil {
+		return err
+	}
+	task.UpdatedAt = time.Now()
+	if task.Status == model.TaskRunning {
+		task.Error = ""
+	}
+	return nil
+}
+
+func (s *TaskService) GetProcessedCount(ctx context.Context) (int64, error) {
+	return s.tasks.GetProcessedCount(ctx)
+}

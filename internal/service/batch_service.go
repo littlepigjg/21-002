@@ -9,8 +9,6 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -20,18 +18,27 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 	successCount := 0
 
 	for _, id := range task.ArticleIDs {
+		task.UpdatedAt = time.Now()
+
 		if ctx.Err() != nil {
 			firstErr = ctx.Err()
+			task.Error = firstErr.Error()
 			break
 		}
+
+		_ = s.tasks.UpdateProgress(ctx, task.ID, id, "fetching")
 
 		article, err := s.articles.GetArticle(ctx, id)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
+			_ = s.tasks.UpdateProgress(ctx, task.ID, id, "missing")
+			task.Error = firstErr.Error()
 			continue
 		}
+
+		_ = s.tasks.UpdateProgress(ctx, task.ID, id, "analyzing")
 
 		result, err := s.analyzer.Analyze(ctx, id, article.Content)
 		if err != nil {
@@ -41,6 +48,9 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			if firstErr == nil {
 				firstErr = err
 			}
+			_ = s.tasks.UpdateProgress(ctx, task.ID, id, "failed")
+			task.Error = firstErr.Error()
+			_ = s.tasks.IncrementProcessed(ctx)
 			continue
 		}
 
@@ -48,12 +58,17 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			if firstErr == nil {
 				firstErr = err
 			}
+			_ = s.tasks.UpdateProgress(ctx, task.ID, id, "failed")
+			task.Error = firstErr.Error()
+			_ = s.tasks.IncrementProcessed(ctx)
 			continue
 		}
 
 		article.Status = model.ArticleReady
 		article.UpdatedAt = time.Now()
 		_ = s.articles.UpdateArticle(ctx, article)
+		_ = s.tasks.UpdateProgress(ctx, task.ID, id, "ready")
+		_ = s.tasks.IncrementProcessed(ctx)
 		successCount++
 	}
 

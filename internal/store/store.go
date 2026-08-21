@@ -30,6 +30,10 @@ type TaskStore interface {
 	ListTasks(ctx context.Context, offset, limit int) ([]*model.Task, int, error)
 	UpdateTask(ctx context.Context, t *model.Task) error
 	DeleteTask(ctx context.Context, id string) error
+	UpdateProgress(ctx context.Context, taskID, articleID, status string) error
+	GetTaskProgress(ctx context.Context, taskID string) (map[string]string, error)
+	IncrementProcessed(ctx context.Context) error
+	GetProcessedCount(ctx context.Context) (int64, error)
 }
 
 // Store 聚合文章、结果与任务三类存储能力。

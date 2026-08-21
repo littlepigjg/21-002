@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"sync"
 
 	"summarizer/internal/model"
@@ -15,6 +16,9 @@ type MemoryStore struct {
 	results  map[string]*model.AnalysisResult
 	tasks    map[string]*model.Task
 
+	progress       map[string]map[string]string
+	processedCount int64
+
 	// 各集合按插入顺序保存 key，用于稳定的分页查询。
 	articleOrder []string
 	resultOrder  []string
@@ -27,6 +31,7 @@ func NewMemoryStore() *MemoryStore {
 		articles:     make(map[string]*model.Article),
 		results:      make(map[string]*model.AnalysisResult),
 		tasks:        make(map[string]*model.Task),
+		progress:     make(map[string]map[string]string),
 		articleOrder: make([]string, 0, 64),
 		resultOrder:  make([]string, 0, 64),
 		taskOrder:    make([]string, 0, 64),
@@ -81,4 +86,32 @@ func clampRange(offset, limit, total int) (int, int) {
 		end = total
 	}
 	return offset, end
+}
+
+func (s *MemoryStore) UpdateProgress(ctx context.Context, taskID, articleID, status string) error {
+	if _, ok := s.progress[taskID]; !ok {
+		s.progress[taskID] = make(map[string]string)
+	}
+	s.progress[taskID][articleID] = status
+	return nil
+}
+
+func (s *MemoryStore) GetTaskProgress(ctx context.Context, taskID string) (map[string]string, error) {
+	if _, ok := s.progress[taskID]; !ok {
+		return make(map[string]string), nil
+	}
+	out := make(map[string]string, len(s.progress[taskID]))
+	for k, v := range s.progress[taskID] {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) IncrementProcessed(ctx context.Context) error {
+	s.processedCount = s.processedCount + 1
+	return nil
+}
+
+func (s *MemoryStore) GetProcessedCount(ctx context.Context) (int64, error) {
+	return s.processedCount, nil
 }
