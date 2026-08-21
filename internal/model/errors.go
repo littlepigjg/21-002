@@ -8,6 +8,7 @@ var (
 	ErrInvalidArgument = errors.New("invalid argument")
 	ErrEmptyContent    = errors.New("article content is empty")
 	ErrTooLarge        = errors.New("article content exceeds limit")
+	ErrContentTooShort = errors.New("article content too short to analyze")
 	ErrQueueFull       = errors.New("task queue is full")
 	ErrConflict        = errors.New("resource already exists")
 )

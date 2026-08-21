@@ -25,6 +25,13 @@ func (s *TaskService) buildBatchReport(ctx context.Context, ids []string) *Batch
 	totalLen := 0
 	failedIDs := make([]string, 0)
 	for i, r := range all {
+		// 缺失或未分析的文章（GetResultsByIDs 以 nil 占位）计入失败，但不解引用。
+		if r == nil {
+			if i < len(ids) {
+				failedIDs = append(failedIDs, ids[i])
+			}
+			continue
+		}
 		totalLen += len(r.Summary)
 		if len(r.Keywords) == 0 && r.SentenceCount == 0 {
 			failedIDs = append(failedIDs, ids[i])

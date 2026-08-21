@@ -57,12 +57,12 @@ func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*mod
 	}
 
 	if a.shouldSkip(content) {
-		return nil, nil
+		return nil, model.ErrContentTooShort
 	}
 
 	sentences := a.preprocessor.Prepare(content)
 	if len(sentences) == 0 {
-		return nil, nil
+		return nil, model.ErrContentTooShort
 	}
 
 	keywords := a.tfidf.Extract(sentences)

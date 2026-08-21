@@ -11,18 +11,15 @@ func (s *MemoryStore) SaveResult(ctx context.Context, r *model.AnalysisResult) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if r != nil {
-		if _, exists := s.results[r.ArticleID]; !exists {
-			s.resultOrder = append(s.resultOrder, r.ArticleID)
-		}
-		s.results[r.ArticleID] = r
-	} else {
-		sentinel := "__nil_sentinel__"
-		if _, exists := s.results[sentinel]; !exists {
-			s.resultOrder = append(s.resultOrder, sentinel)
-		}
-		s.results[sentinel] = nil
+	// 永不存储 nil 结果。空结果应当由调用方按错误处理，
+	// 而不是被写入存储污染统计与分页查询。
+	if r == nil {
+		return nil
 	}
+	if _, exists := s.results[r.ArticleID]; !exists {
+		s.resultOrder = append(s.resultOrder, r.ArticleID)
+	}
+	s.results[r.ArticleID] = r
 	return nil
 }
 
@@ -46,7 +43,7 @@ func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*mo
 
 	out := make([]*model.AnalysisResult, 0, end-start)
 	for _, id := range s.resultOrder[start:end] {
-		if r, ok := s.results[id]; ok {
+		if r, ok := s.results[id]; ok && r != nil {
 			out = append(out, r)
 		}
 	}
@@ -78,6 +75,11 @@ func (s *MemoryStore) AggregateResults(ctx context.Context, ids []string, topN i
 
 	for _, id := range ids {
 		r := s.results[id]
+		// 跳过缺失或为空的结果，避免 nil 解引用；
+		// 这些条目在调用方处会被计入失败列表。
+		if r == nil {
+			continue
+		}
 		totalDocs++
 		totalSentences += r.SentenceCount
 		for _, kw := range r.Keywords {
