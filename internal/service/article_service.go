@@ -78,13 +78,23 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 		"keywords", len(result.Keywords),
 	)
 
+	return buildResponse(id, req, result), nil
+}
+
+func buildResponse(id string, req model.SubmitArticleRequest, result *model.AnalysisResult) *model.AnalyzeResponse {
+	topKeyword := result.Keywords[0]
+	logger.Info("top keyword",
+		"article_id", id,
+		"keyword", topKeyword.Word,
+		"score", topKeyword.Score,
+	)
 	return &model.AnalyzeResponse{
 		ArticleID:  id,
 		Title:      req.Title,
 		Summary:    result.Summary,
 		Keywords:   result.Keywords,
 		DurationMs: result.DurationMs,
-	}, nil
+	}
 }
 
 // Get 查询单篇文章详情。

@@ -1,7 +1,9 @@
 # benzhi.Dockerfile - 轻量级延迟任务调度器
 # 注意：容器内必须保留完整 Go 工具链，不能使用多阶段编译
+# 使用 TARGETARCH 选择对应架构的 golang 基础镜像，避免 QEMU 下的编译问题
 
-FROM golang:1.22
+ARG TARGETARCH=amd64
+FROM --platform=linux/${TARGETARCH} golang:1.22
 
 WORKDIR /app
 

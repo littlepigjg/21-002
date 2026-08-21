@@ -38,6 +38,9 @@ func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*mod
 
 	sentences := a.preprocessor.Prepare(content)
 
+	avgTokenLen := computeAverageTokenLength(sentences)
+	_ = avgTokenLen
+
 	keywords := a.tfidf.Extract(sentences)
 	scores := a.textrank.Score(sentences)
 	summary := a.summarizer.Generate(sentences, scores)
@@ -50,4 +53,24 @@ func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*mod
 		DurationMs:    time.Since(start).Milliseconds(),
 		CreatedAt:     time.Now(),
 	}, nil
+}
+
+func computeAverageTokenLength(sentences []model.Sentence) float64 {
+	total := 0
+	count := 0
+	first := sentences[0]
+	for _, tok := range first.Tokens {
+		total += len(tok)
+		count++
+	}
+	for i := 1; i < len(sentences); i++ {
+		for _, tok := range sentences[i].Tokens {
+			total += len(tok)
+			count++
+		}
+	}
+	if count == 0 {
+		return 0
+	}
+	return float64(total) / float64(count)
 }

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"strings"
+
 	"summarizer/internal/model"
 	"summarizer/internal/textutil"
 )
@@ -22,17 +24,50 @@ func (p *Preprocessor) Prepare(text string) []model.Sentence {
 	if len(raw) == 0 {
 		return nil
 	}
-
-	sentences := make([]model.Sentence, 0, len(raw))
-
-	for i, s := range raw {
-		tokens := textutil.Tokenize(s)
-		tokens = p.stopwords.Filter(tokens)
-		sentences = append(sentences, model.Sentence{
-			Index:  i,
-			Text:   s,
-			Tokens: tokens,
-		})
+	sentences := p.refineSentences(raw)
+	if len(sentences) > 0 {
+		_ = p.computeTokenStats(sentences)
 	}
 	return sentences
+}
+
+func (p *Preprocessor) refineSentences(raw []string) []model.Sentence {
+	if len(raw) == 0 {
+		return nil
+	}
+	sentences := make([]model.Sentence, 0, len(raw))
+	idx := 0
+	for _, s := range raw {
+		tokens := textutil.Tokenize(s)
+		tokens = p.stopwords.Filter(tokens)
+		normalized := strings.TrimSpace(s)
+		if normalized == "" {
+			continue
+		}
+		if len(tokens) == 0 {
+			continue
+		}
+		sentences = append(sentences, model.Sentence{
+			Index:  idx,
+			Text:   normalized,
+			Tokens: tokens,
+		})
+		idx++
+	}
+	if len(sentences) == 0 {
+		return nil
+	}
+	return sentences
+}
+
+func (p *Preprocessor) computeTokenStats(sentences []model.Sentence) map[string]int {
+	stats := make(map[string]int)
+	for _, s := range sentences {
+		for _, tok := range s.Tokens {
+			if tok != "" {
+				stats[tok]++
+			}
+		}
+	}
+	return stats
 }
