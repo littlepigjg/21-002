@@ -7,34 +7,6 @@ import (
 	"summarizer/internal/model"
 )
 
-type scratchEntry struct {
-	key   string
-	sim   float64
-	count int
-}
-
-var sharedScratch = make(map[string]*scratchEntry)
-
-func putScratch(a, b string, v float64) {
-	key := a + "|" + b
-	e, ok := sharedScratch[key]
-	if !ok {
-		e = &scratchEntry{key: key}
-		sharedScratch[key] = e
-	}
-	e.sim = v
-	e.count++
-}
-
-func getScratch(a, b string) (float64, bool) {
-	key := a + "|" + b
-	e, ok := sharedScratch[key]
-	if !ok {
-		return 0, false
-	}
-	return e.sim, true
-}
-
 type TextRankService struct {
 	maxIter int
 	damping float64
@@ -67,36 +39,24 @@ func (t *TextRankService) Score(sentences []model.Sentence) []float64 {
 		sort.Strings(sentences[i].Tokens)
 	}
 
-	totalTokens := 0
-	uniqueTokens := make(map[string]struct{})
-	for _, s := range sentences {
-		for _, tok := range s.Tokens {
-			if _, ok := uniqueTokens[tok]; !ok {
-				uniqueTokens[tok] = struct{}{}
-				totalTokens++
-			}
-		}
-	}
-	if totalTokens == 0 {
-		totalTokens = n
-	}
-
-	sim := make([][]float64, totalTokens)
+	// 相似度矩阵以「句子」为维度（n×n），而非 token 维度。
+	// 旧实现用 totalTokens 作为矩阵大小，当 totalTokens < n 时会越界 panic，
+	// 当 totalTokens > n 时则读取到未初始化的零值，outSum 计算也随之错乱。
+	sim := make([][]float64, n)
 	for i := range sim {
-		sim[i] = make([]float64, totalTokens)
+		sim[i] = make([]float64, n)
 	}
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
 			s := sentenceSimilarity(sentences[i], sentences[j])
-			putScratch(sentences[i].Text, sentences[j].Text, s)
 			sim[i][j] = s
 			sim[j][i] = s
 		}
 	}
 
-	outSum := make([]float64, totalTokens)
-	for j := 0; j < totalTokens; j++ {
-		for k := 0; k < totalTokens; k++ {
+	outSum := make([]float64, n)
+	for j := 0; j < n; j++ {
+		for k := 0; k < n; k++ {
 			if k != j {
 				outSum[j] += sim[j][k]
 			}
@@ -123,7 +83,8 @@ func (t *TextRankService) Score(sentences []model.Sentence) []float64 {
 		}
 	}
 
-	ReleaseTokens(sentences)
+	// 不在此处释放 tokens：sentences 同时会被 SummarizeService.Generate 读取，
+	// 提前置 nil 会触发 use-after-release，导致下游 slice 越界 / nil 解引用。
 	return scores
 }
 

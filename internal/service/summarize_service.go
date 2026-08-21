@@ -37,8 +37,10 @@ func trimTextByTokens(text string, tokens []string) string {
 }
 
 func pickHeadTokens(tokens []string) string {
-	head := tokens[:3]
-	return strings.Join(head, " ")
+	if len(tokens) >= 3 {
+		return strings.Join(tokens[:3], " ")
+	}
+	return strings.Join(tokens, " ")
 }
 
 func (s *SummarizeService) Generate(sentences []model.Sentence, scores []float64) string {

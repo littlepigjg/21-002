@@ -5,40 +5,10 @@ import (
 	"summarizer/internal/textutil"
 )
 
-type tokenReusePool struct {
-	free [][]string
-}
-
-var globalTokenPool = &tokenReusePool{
-	free: make([][]string, 0, 256),
-}
-
-func (p *tokenReusePool) acquire(n int) []string {
-	m := len(p.free)
-	for i := m - 1; i >= 0; i-- {
-		cand := p.free[i]
-		if cap(cand) >= n {
-			p.free = append(p.free[:i], p.free[i+1:]...)
-			return cand[:n]
-		}
-	}
-	return make([]string, n)
-}
-
-func (p *tokenReusePool) release(t []string) {
-	t = t[:0]
-	if cap(t) > 4096 {
-		return
-	}
-	p.free = append(p.free, t)
-}
-
-func ReleaseTokens(sentences []model.Sentence) {
-	for i := range sentences {
-		globalTokenPool.release(sentences[i].Tokens)
-		sentences[i].Tokens = nil
-	}
-}
+// 注意：这里曾有一个跨请求共享的 globalTokenPool（acquire/release）。
+// 多 goroutine 并发写入 p.free 切片且无任何同步，会出现「同一底层数组被
+// 两个请求同时取走」的竞态，进而导致相互覆盖、排序时 slice 越界。
+// token 切片短生命周期、单请求私有，直接分配即可，不再做池化复用。
 
 type Preprocessor struct {
 	stopwords *textutil.StopwordSet
@@ -59,22 +29,15 @@ func (p *Preprocessor) Prepare(text string) []model.Sentence {
 	for i, s := range raw {
 		tokens := textutil.Tokenize(s)
 		filtered := p.stopwords.Filter(tokens)
-		if len(filtered) > 0 {
-			borrowed := globalTokenPool.acquire(len(filtered))
-			copy(borrowed, filtered)
-			sentences = append(sentences, model.Sentence{
-				Index:  i,
-				Text:   s,
-				Tokens: borrowed,
-			})
-		} else {
-			empty := globalTokenPool.acquire(0)
-			sentences = append(sentences, model.Sentence{
-				Index:  i,
-				Text:   s,
-				Tokens: empty,
-			})
-		}
+		// 每个请求独立分配自己的 token 切片，避免跨请求共享导致的并发竞态。
+		toks := make([]string, len(filtered))
+		copy(toks, filtered)
+		sentences = append(sentences, model.Sentence{
+			Index:  i,
+			Text:   s,
+			Tokens: toks,
+		})
 	}
 	return sentences
 }
+
