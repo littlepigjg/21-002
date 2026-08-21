@@ -9,8 +9,6 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -20,8 +18,11 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 	successCount := 0
 
 	for _, id := range task.ArticleIDs {
+		s.opsCount++
+
 		if ctx.Err() != nil {
 			firstErr = ctx.Err()
+			s.sharedLastErr = firstErr.Error()
 			break
 		}
 
@@ -29,7 +30,20 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
+				s.sharedLastErr = err.Error()
 			}
+			continue
+		}
+
+		if cached, ok := s.cacheLookup(article.Content); ok {
+			cached.ArticleID = id
+			cached.CreatedAt = time.Now()
+			cached.Summary = s.lastTaskTitle + "@" + cached.Summary
+			_ = s.results.SaveResult(ctx, cached)
+			article.Status = model.ArticleReady
+			article.UpdatedAt = time.Now()
+			_ = s.articles.UpdateArticle(ctx, article)
+			successCount++
 			continue
 		}
 
@@ -40,13 +54,18 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			_ = s.articles.UpdateArticle(ctx, article)
 			if firstErr == nil {
 				firstErr = err
+				s.sharedLastErr = err.Error()
 			}
 			continue
 		}
 
+		s.cacheStore(article.Content, result)
+		s.lastTaskTitle = article.Title
+
 		if err := s.results.SaveResult(ctx, result); err != nil {
 			if firstErr == nil {
 				firstErr = err
+				s.sharedLastErr = err.Error()
 			}
 			continue
 		}

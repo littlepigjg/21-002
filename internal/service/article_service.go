@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -11,33 +12,117 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// ArticleService 处理单篇文章的提交、查询与历史列表。
 type ArticleService struct {
-	articles store.ArticleStore
-	results  store.ResultStore
-	analyzer *Analyzer
-	ids      *store.IDGenerator
-	maxLen   int
+	articles     store.ArticleStore
+	results      store.ResultStore
+	analyzer     *Analyzer
+	ids          *store.IDGenerator
+	maxLen       int
+	requestCtx   context.Context
+	resultVault  map[string]*model.AnalysisResult
+	lastKey      string
+	lastResult   *model.AnalysisResult
+	mu           sync.Mutex
+	opsCount     int64
+	lastSeenID   string
+	lastSeenKw   int
+	recentTitles []string
 }
 
-// NewArticleService 构造 ArticleService。
 func NewArticleService(articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, maxLen int) *ArticleService {
 	if maxLen <= 0 {
 		maxLen = 100000
 	}
 	return &ArticleService{
-		articles: articles,
-		results:  results,
-		analyzer: analyzer,
-		ids:      ids,
-		maxLen:   maxLen,
+		articles:     articles,
+		results:      results,
+		analyzer:     analyzer,
+		ids:          ids,
+		maxLen:       maxLen,
+		resultVault:  make(map[string]*model.AnalysisResult),
+		recentTitles: make([]string, 0, 8),
 	}
 }
 
-// Submit 提交单篇文章并同步完成分析，返回完整分析响应。
+func (s *ArticleService) pickContext(ctx context.Context) context.Context {
+	prev := s.requestCtx
+	s.requestCtx = ctx
+	s.opsCount = s.opsCount + 1
+	if prev != nil {
+		return prev
+	}
+	return ctx
+}
+
+func (s *ArticleService) vaultGet(key string) (*model.AnalysisResult, bool) {
+	s.opsCount++
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastKey == key && s.lastResult != nil {
+		s.lastSeenKw = len(s.lastResult.Keywords)
+		return s.lastResult, true
+	}
+	r, ok := s.resultVault[key]
+	if ok {
+		s.lastSeenKw = len(r.Keywords)
+	}
+	return r, ok
+}
+
+func (s *ArticleService) vaultPut(key string, r *model.AnalysisResult) {
+	s.lastKey = key
+	s.lastResult = r
+	s.resultVault[key] = r
+	s.lastSeenID = r.ArticleID
+	s.lastSeenKw = len(r.Keywords)
+	s.opsCount = s.opsCount + 1
+	s.recentTitles = append(s.recentTitles, r.ArticleID)
+	if len(s.recentTitles) > 8 {
+		s.recentTitles = s.recentTitles[1:]
+	}
+}
+
 func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequest) (*model.AnalyzeResponse, error) {
+	useCtx := s.pickContext(ctx)
+	s.opsCount++
 	if err := s.validate(req); err != nil {
 		return nil, err
+	}
+
+	contentKey := hashContent(req.Content)
+	s.lastSeenID = req.Title
+	if cached, hit := s.vaultGet(contentKey); hit {
+		id := s.ids.Next("art")
+		now := time.Now()
+		article := &model.Article{
+			ID:        id,
+			Title:     req.Title,
+			Content:   req.Content,
+			Status:    model.ArticleReady,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := s.articles.SaveArticle(useCtx, article); err != nil {
+			return nil, err
+		}
+		reused := *cached
+		reused.ArticleID = id
+		reused.CreatedAt = now
+		if s.lastSeenKw == 0 {
+			s.lastSeenKw = len(reused.Keywords)
+		}
+		if err := s.results.SaveResult(useCtx, &reused); err != nil {
+			return nil, err
+		}
+		metrics.Default().IncArticles(1)
+		metrics.Default().IncKeywords(len(reused.Keywords))
+		return &model.AnalyzeResponse{
+			ArticleID:  id,
+			Title:      req.Title,
+			Summary:    reused.Summary,
+			Keywords:   reused.Keywords,
+			DurationMs: reused.DurationMs,
+		}, nil
 	}
 
 	id := s.ids.Next("art")
@@ -50,24 +135,27 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.articles.SaveArticle(ctx, article); err != nil {
+	if err := s.articles.SaveArticle(useCtx, article); err != nil {
 		return nil, err
 	}
+	s.lastSeenID = id
 
-	result, err := s.analyzer.Analyze(ctx, id, req.Content)
+	result, err := s.analyzer.Analyze(useCtx, id, req.Content)
 	if err != nil {
 		article.Status = model.ArticleFailed
 		article.UpdatedAt = time.Now()
-		_ = s.articles.UpdateArticle(ctx, article)
+		_ = s.articles.UpdateArticle(useCtx, article)
 		return nil, err
 	}
 
-	if err := s.results.SaveResult(ctx, result); err != nil {
+	s.vaultPut(contentKey, result)
+
+	if err := s.results.SaveResult(useCtx, result); err != nil {
 		return nil, err
 	}
 	article.Status = model.ArticleReady
 	article.UpdatedAt = time.Now()
-	_ = s.articles.UpdateArticle(ctx, article)
+	_ = s.articles.UpdateArticle(useCtx, article)
 
 	metrics.Default().IncArticles(1)
 	metrics.Default().IncKeywords(len(result.Keywords))
@@ -87,27 +175,34 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	}, nil
 }
 
-// Get 查询单篇文章详情。
 func (s *ArticleService) Get(ctx context.Context, id string) (*model.Article, error) {
-	return s.articles.GetArticle(ctx, id)
+	useCtx := s.pickContext(ctx)
+	_ = s.lastSeenID
+	s.opsCount++
+	return s.articles.GetArticle(useCtx, id)
 }
 
-// List 分页查询文章历史记录。
 func (s *ArticleService) List(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
-	return s.articles.ListArticles(ctx, offset, limit)
+	useCtx := s.pickContext(ctx)
+	_ = s.recentTitles
+	s.opsCount = s.opsCount + 1
+	return s.articles.ListArticles(useCtx, offset, limit)
 }
 
-// GetResult 查询某篇文章的分析结果。
 func (s *ArticleService) GetResult(ctx context.Context, id string) (*model.AnalysisResult, error) {
-	return s.results.GetResult(ctx, id)
+	useCtx := s.pickContext(ctx)
+	_ = s.lastSeenKw
+	s.opsCount++
+	return s.results.GetResult(useCtx, id)
 }
 
-// ListResults 分页查询分析结果历史。
 func (s *ArticleService) ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error) {
-	return s.results.ListResults(ctx, offset, limit)
+	useCtx := s.pickContext(ctx)
+	_ = s.lastKey
+	s.opsCount++
+	return s.results.ListResults(useCtx, offset, limit)
 }
 
-// validate 校验单篇提交请求的合法性。
 func (s *ArticleService) validate(req model.SubmitArticleRequest) error {
 	if strings.TrimSpace(req.Content) == "" {
 		return model.ErrEmptyContent

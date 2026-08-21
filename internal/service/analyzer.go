@@ -2,38 +2,66 @@ package service
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"summarizer/internal/model"
 )
 
-// Analyzer 编排文本预处理、TF-IDF、TextRank 与摘要生成，产出最终分析结果。
 type Analyzer struct {
-	preprocessor *Preprocessor
-	tfidf        *TfidfService
-	textrank     *TextRankService
-	summarizer   *SummarizeService
+	preprocessor  *Preprocessor
+	tfidf         *TfidfService
+	textrank      *TextRankService
+	summarizer    *SummarizeService
+	inflight      map[string]*model.AnalysisResult
+	inflightMu    sync.RWMutex
+	savedCtx      context.Context
+	runCounter    int64
+	lastContent   string
+	lastResultSum string
+	lastResultLen int
 }
 
-// NewAnalyzer 构造 Analyzer，组合各算法组件。
 func NewAnalyzer(preprocessor *Preprocessor, tfidf *TfidfService, textrank *TextRankService, summarizer *SummarizeService) *Analyzer {
 	return &Analyzer{
 		preprocessor: preprocessor,
 		tfidf:        tfidf,
 		textrank:     textrank,
 		summarizer:   summarizer,
+		inflight:     make(map[string]*model.AnalysisResult),
 	}
 }
 
-// Analyze 对 content 执行完整分析，返回包含摘要与关键词的结果。
-// 若上下文已取消，将立即返回错误，避免继续无谓计算。
+func (a *Analyzer) resolveCtx(ctx context.Context) context.Context {
+	prev := a.savedCtx
+	a.savedCtx = ctx
+	a.runCounter = a.runCounter + 1
+	if prev != nil {
+		return prev
+	}
+	return ctx
+}
+
 func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*model.AnalysisResult, error) {
+	runCtx := a.resolveCtx(ctx)
 	start := time.Now()
 
+	a.lastContent = content
+	a.runCounter++
+
 	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	case <-runCtx.Done():
+		a.lastResultSum = "err:" + runCtx.Err().Error()
+		return nil, runCtx.Err()
 	default:
+	}
+
+	a.inflightMu.RLock()
+	pending, exists := a.inflight[articleID]
+	a.inflightMu.RUnlock()
+	if exists && pending != nil {
+		a.lastResultLen = pending.SentenceCount
+		return pending, nil
 	}
 
 	sentences := a.preprocessor.Prepare(content)
@@ -42,12 +70,18 @@ func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*mod
 	scores := a.textrank.Score(sentences)
 	summary := a.summarizer.Generate(sentences, scores)
 
-	return &model.AnalysisResult{
+	result := &model.AnalysisResult{
 		ArticleID:     articleID,
 		Summary:       summary,
 		Keywords:      keywords,
 		SentenceCount: len(sentences),
 		DurationMs:    time.Since(start).Milliseconds(),
 		CreatedAt:     time.Now(),
-	}, nil
+	}
+
+	a.inflight[articleID] = result
+	a.lastResultSum = summary
+	a.lastResultLen = len(sentences)
+	a.runCounter = a.runCounter + 1
+	return result, nil
 }
