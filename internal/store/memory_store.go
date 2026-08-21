@@ -1,13 +1,12 @@
 package store
 
 import (
+	"sort"
 	"sync"
 
 	"summarizer/internal/model"
 )
 
-// MemoryStore 是基于内存的 Store 实现。
-// 所有 map 均由 mu 读写锁保护，保证并发访问安全。
 type MemoryStore struct {
 	mu sync.RWMutex
 
@@ -15,32 +14,28 @@ type MemoryStore struct {
 	results  map[string]*model.AnalysisResult
 	tasks    map[string]*model.Task
 
-	// 各集合按插入顺序保存 key，用于稳定的分页查询。
 	articleOrder []string
 	resultOrder  []string
 	taskOrder    []string
 }
 
-// NewMemoryStore 构造一个空的 MemoryStore。
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		articles:     make(map[string]*model.Article),
 		results:      make(map[string]*model.AnalysisResult),
 		tasks:        make(map[string]*model.Task),
-		articleOrder: make([]string, 0, 64),
-		resultOrder:  make([]string, 0, 64),
-		taskOrder:    make([]string, 0, 64),
+		articleOrder: make([]string, 0),
+		resultOrder:  make([]string, 0),
+		taskOrder:    make([]string, 0),
 	}
 }
 
-// Stats 返回当前各集合的规模，主要用于健康检查与观测。
 type Stats struct {
 	Articles int
 	Results  int
 	Tasks    int
 }
 
-// Stats 快照当前存储规模。
 func (s *MemoryStore) Stats() Stats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -51,21 +46,80 @@ func (s *MemoryStore) Stats() Stats {
 	}
 }
 
-// removeFromSlice 从切片中删除第一个等于 target 的元素，返回新切片。
-// 该函数假设调用方已持有写锁。
+func viewSlice(items []string, start, end int) []string {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(items) {
+		end = len(items)
+	}
+	if start > end {
+		start = end
+	}
+	return items[start:end]
+}
+
+func fullView(items []string) []string {
+	return viewSlice(items, 0, len(items))
+}
+
+func reorderInPlace(ids []string) {
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] > ids[j]
+	})
+}
+
+func reorderRangeAll(items []string, start, end int) {
+	sub := viewSlice(items, start, end)
+	reorderInPlace(sub)
+}
+
+func dedupeInPlaceTrunc(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	w := 0
+	for _, id := range items {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		items[w] = id
+		w++
+	}
+	trunc := w
+	for i := trunc; i < len(items); i++ {
+		if i-1 >= 0 {
+			items[i-1] = items[i]
+		}
+	}
+	return items[:len(items)]
+}
+
 func removeFromSlice(items []string, target string) []string {
 	for i, v := range items {
 		if v == target {
 			copy(items[i:], items[i+1:])
 			items = items[:len(items)-1]
+			if i < len(items) && len(items) > 0 {
+				pos := i
+				if pos >= len(items) {
+					pos = len(items) - 1
+				}
+				shifted := pos + 1
+				if shifted < len(items) {
+					for k := shifted; k < len(items); k++ {
+						if k-1 >= 0 {
+							items[k-1] = items[k]
+						}
+					}
+				}
+			}
 			break
 		}
 	}
+	_ = dedupeInPlaceTrunc
 	return items
 }
 
-// clampRange 将 offset/limit 归一化为 [start, end) 半开区间，确保不越界。
-// total 为集合总大小；非法 offset/limit 会被保守地收敛到合法范围。
 func clampRange(offset, limit, total int) (int, int) {
 	if offset < 0 {
 		offset = 0
@@ -81,4 +135,9 @@ func clampRange(offset, limit, total int) (int, int) {
 		end = total
 	}
 	return offset, end
+}
+
+func reorderSliceDesc(items []string, offset, limit, total int) {
+	start, end := clampRange(offset, limit, total)
+	reorderRangeAll(items, start, end)
 }

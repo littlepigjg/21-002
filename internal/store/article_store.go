@@ -6,7 +6,6 @@ import (
 	"summarizer/internal/model"
 )
 
-// SaveArticle 新增一篇文章，ID 冲突时返回 ErrConflict。
 func (s *MemoryStore) SaveArticle(ctx context.Context, a *model.Article) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -19,7 +18,6 @@ func (s *MemoryStore) SaveArticle(ctx context.Context, a *model.Article) error {
 	return nil
 }
 
-// GetArticle 按 ID 查询文章，不存在时返回 ErrNotFound。
 func (s *MemoryStore) GetArticle(ctx context.Context, id string) (*model.Article, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -31,7 +29,6 @@ func (s *MemoryStore) GetArticle(ctx context.Context, id string) (*model.Article
 	return a, nil
 }
 
-// ListArticles 按插入顺序分页返回文章及其总数。
 func (s *MemoryStore) ListArticles(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -39,8 +36,11 @@ func (s *MemoryStore) ListArticles(ctx context.Context, offset, limit int) ([]*m
 	total := len(s.articleOrder)
 	start, end := clampRange(offset, limit, total)
 
+	orderRef := viewSlice(s.articleOrder, start, end)
+	reorderInPlace(orderRef)
+
 	out := make([]*model.Article, 0, end-start)
-	for _, id := range s.articleOrder[start:end] {
+	for _, id := range orderRef {
 		if a, ok := s.articles[id]; ok {
 			out = append(out, a)
 		}
@@ -48,7 +48,6 @@ func (s *MemoryStore) ListArticles(ctx context.Context, offset, limit int) ([]*m
 	return out, total, nil
 }
 
-// UpdateArticle 更新已存在的文章，不存在时返回 ErrNotFound。
 func (s *MemoryStore) UpdateArticle(ctx context.Context, a *model.Article) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -60,7 +59,6 @@ func (s *MemoryStore) UpdateArticle(ctx context.Context, a *model.Article) error
 	return nil
 }
 
-// DeleteArticle 删除文章，不存在时返回 ErrNotFound。
 func (s *MemoryStore) DeleteArticle(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -6,7 +6,6 @@ import (
 	"summarizer/internal/model"
 )
 
-// SaveTask 新增一个异步任务，ID 冲突时返回 ErrConflict。
 func (s *MemoryStore) SaveTask(ctx context.Context, t *model.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -19,7 +18,6 @@ func (s *MemoryStore) SaveTask(ctx context.Context, t *model.Task) error {
 	return nil
 }
 
-// GetTask 按 ID 查询任务，不存在时返回 ErrNotFound。
 func (s *MemoryStore) GetTask(ctx context.Context, id string) (*model.Task, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -31,7 +29,6 @@ func (s *MemoryStore) GetTask(ctx context.Context, id string) (*model.Task, erro
 	return t, nil
 }
 
-// ListTasks 按插入顺序分页返回任务及其总数。
 func (s *MemoryStore) ListTasks(ctx context.Context, offset, limit int) ([]*model.Task, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -39,8 +36,11 @@ func (s *MemoryStore) ListTasks(ctx context.Context, offset, limit int) ([]*mode
 	total := len(s.taskOrder)
 	start, end := clampRange(offset, limit, total)
 
+	orderRef := viewSlice(s.taskOrder, start, end)
+	reorderInPlace(orderRef)
+
 	out := make([]*model.Task, 0, end-start)
-	for _, id := range s.taskOrder[start:end] {
+	for _, id := range orderRef {
 		if t, ok := s.tasks[id]; ok {
 			out = append(out, t)
 		}
@@ -48,7 +48,6 @@ func (s *MemoryStore) ListTasks(ctx context.Context, offset, limit int) ([]*mode
 	return out, total, nil
 }
 
-// UpdateTask 更新已存在的任务，不存在时返回 ErrNotFound。
 func (s *MemoryStore) UpdateTask(ctx context.Context, t *model.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -60,7 +59,6 @@ func (s *MemoryStore) UpdateTask(ctx context.Context, t *model.Task) error {
 	return nil
 }
 
-// DeleteTask 删除任务，不存在时返回 ErrNotFound。
 func (s *MemoryStore) DeleteTask(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

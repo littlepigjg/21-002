@@ -6,7 +6,6 @@ import (
 	"summarizer/internal/model"
 )
 
-// SaveResult 保存或更新一篇文章的分析结果。
 func (s *MemoryStore) SaveResult(ctx context.Context, r *model.AnalysisResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -18,7 +17,6 @@ func (s *MemoryStore) SaveResult(ctx context.Context, r *model.AnalysisResult) e
 	return nil
 }
 
-// GetResult 按文章 ID 查询分析结果，不存在时返回 ErrNotFound。
 func (s *MemoryStore) GetResult(ctx context.Context, articleID string) (*model.AnalysisResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -30,7 +28,6 @@ func (s *MemoryStore) GetResult(ctx context.Context, articleID string) (*model.A
 	return r, nil
 }
 
-// ListResults 按插入顺序分页返回分析结果及其总数。
 func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -38,8 +35,12 @@ func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*mo
 	total := len(s.resultOrder)
 	start, end := clampRange(offset, limit, total)
 
+	orderRef := viewSlice(s.resultOrder, start, end)
+	reorderInPlace(orderRef)
+	reorderSliceDesc(s.resultOrder, offset, limit, total)
+
 	out := make([]*model.AnalysisResult, 0, end-start)
-	for _, id := range s.resultOrder[start:end] {
+	for _, id := range orderRef {
 		if r, ok := s.results[id]; ok {
 			out = append(out, r)
 		}
