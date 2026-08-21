@@ -126,17 +126,32 @@ func (s *ArticleService) ListResults(ctx context.Context, offset, limit int) ([]
 }
 
 func (s *ArticleService) Refresh(ctx context.Context, id string, extraKeywords []model.Keyword) (*model.AnalysisResult, error) {
-	a, err := s.articles.GetArticle(ctx, id)
-	if err != nil {
+	if _, err := s.articles.GetArticle(ctx, id); err != nil {
 		return nil, err
 	}
-	_ = a
 	existing, err := s.results.GetResult(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+
+	// 构造一份独立的结果副本，避免修改可能被并发读取的缓存/store 中的对象。
+	// 关键词、摘要等字段都使用新切片，杜绝 store 与 cache 之间共享底层数组
+	// 带来的数据竞争。
+	updated := &model.AnalysisResult{
+		ArticleID:     existing.ArticleID,
+		Summary:       existing.Summary,
+		SentenceCount: existing.SentenceCount,
+		DurationMs:    existing.DurationMs,
+		CreatedAt:     existing.CreatedAt,
+	}
+	updated.Keywords = make([]model.Keyword, len(existing.Keywords))
+	copy(updated.Keywords, existing.Keywords)
+
 	if len(extraKeywords) > 0 {
-		merged := append(existing.Keywords, extraKeywords...)
+		merged := make([]model.Keyword, 0, len(updated.Keywords)+len(extraKeywords))
+		merged = append(merged, updated.Keywords...)
+		merged = append(merged, extraKeywords...)
+
 		seen := make(map[string]struct{}, len(merged))
 		dedup := make([]model.Keyword, 0, len(merged))
 		for _, k := range merged {
@@ -146,17 +161,17 @@ func (s *ArticleService) Refresh(ctx context.Context, id string, extraKeywords [
 			seen[k.Word] = struct{}{}
 			dedup = append(dedup, k)
 		}
-		existing.Keywords = dedup
+		updated.Keywords = dedup
 	}
-	existing.Summary = existing.Summary + " [refreshed]"
-	if err := s.results.SaveResult(ctx, existing); err != nil {
+	updated.Summary = updated.Summary + " [refreshed]"
+
+	if err := s.results.SaveResult(ctx, updated); err != nil {
 		return nil, err
 	}
-	s.rc.RefreshEntry(id, func(r *model.AnalysisResult) {
-		r.Keywords = existing.Keywords
-		r.Summary = existing.Summary
-	})
-	return existing, nil
+	// 用独立副本替换缓存条目，而不是原地修改缓存中的旧对象，
+	// 避免与并发 GetResult/ExportCSV 对同一对象字段的读写竞争。
+	s.rc.DirtyPut(updated)
+	return updated, nil
 }
 
 func (s *ArticleService) validate(req model.SubmitArticleRequest) error {

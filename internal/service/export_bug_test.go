@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"summarizer/internal/cache"
 	"summarizer/internal/model"
@@ -287,4 +288,130 @@ func TestBugSumm17CrossSharedBufCorruption(t *testing.T) {
 	}
 
 	fmt.Println("GREEN（绿灯，缺陷已修复）")
+}
+
+// TestBugSumm17HighConcurrencyLoad 验证在 30s 高并发混合负载下：
+//   - 无 panic、无错误返回；
+//   - 任意时刻导出的 CSV 首行均为固定表头，且行内容与 store 快照一一对应。
+//
+// 混合负载包含 Submit、GetResult、Refresh、ExportCSV、ListResults。
+// 该测试可被 -race 检测：go test -race -run TestBugSumm17HighConcurrencyLoad -count=N。
+func TestBugSumm17HighConcurrencyLoad(t *testing.T) {
+	articleSvc, exportSvc, memStore, _ := buildServicesForBugTest()
+
+	// 默认 30s 高并发混合负载；可通过 SUMM_LOAD_DURATION 调整时长便于本地快速验证。
+	loadDur := 30 * time.Second
+	if v := os.Getenv("SUMM_LOAD_DURATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			loadDur = d
+		}
+	}
+
+	contents := []string{
+		"Fox jumps dog. Foxes run fast. Dogs run slow.",
+		"Machine learns patterns. Data trains models. Models predict outcomes.",
+		"Golang compiles fast. Static typing helps. Bugs appear early.",
+		"Cloud serves requests. Storage scales well. Delivery goes global.",
+		"Nutrition fuels health. Exercise builds strength. Vegetables help growth.",
+	}
+
+	// 预置一批文章作为后续 GetResult/Refresh 的目标。
+	seedIDs := make([]string, 0, 16)
+	for i := 0; i < 16; i++ {
+		seedIDs = append(seedIDs, submitOne(t, articleSvc,
+			fmt.Sprintf("seed-%d", i), contents[i%len(contents)]))
+	}
+
+	deadline := time.Now().Add(loadDur)
+	var wg sync.WaitGroup
+	errCh := make(chan error, 64)
+	panicCh := make(chan string, 64)
+	start := make(chan struct{})
+
+	workers := 32
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					select {
+					case panicCh <- fmt.Sprintf("panic in worker %d: %v", id, r):
+					default:
+					}
+				}
+			}()
+			<-start
+			var i int
+			for time.Now().Before(deadline) {
+				switch (id + i) % 5 {
+				case 0:
+					req := model.SubmitArticleRequest{
+						Title:   fmt.Sprintf("load-%d-%d", id, i),
+						Content: contents[i%len(contents)],
+					}
+					if _, err := articleSvc.Submit(context.Background(), req); err != nil {
+						errCh <- fmt.Errorf("submit w%d i%d: %w", id, i, err)
+						return
+					}
+				case 1:
+					aid := seedIDs[i%len(seedIDs)]
+					if _, err := articleSvc.GetResult(context.Background(), aid); err != nil {
+						errCh <- fmt.Errorf("getresult w%d i%d: %w", id, i, err)
+						return
+					}
+				case 2:
+					aid := seedIDs[i%len(seedIDs)]
+					if _, err := articleSvc.Refresh(context.Background(), aid, []model.Keyword{
+						{Word: fmt.Sprintf("extra-%d-%d", id, i), Score: 0.1, TF: 1, IDF: 0.1},
+					}); err != nil {
+						errCh <- fmt.Errorf("refresh w%d i%d: %w", id, i, err)
+						return
+					}
+				case 3:
+					dir := t.TempDir()
+					p := filepath.Join(dir, fmt.Sprintf("load-%d-%d.csv", id, i))
+					if err := exportSvc.ExportCSV(p); err != nil {
+						errCh <- fmt.Errorf("export w%d i%d: %w", id, i, err)
+						return
+					}
+					// 抽检：CSV 结构自洽即可（首行固定表头、每行字段完整、
+					// 每行 article_id/word 非空且一一对应）。运行期间 store 仍在
+					// 被 Submit/Refresh 修改，导出与 store 是两次独立快照，不应
+					// 在此做跨快照一致性比对（那会引入 TOCTOU 假阳性）。
+					// readKeywordsFromCSV 在首行非表头或字段缺失时直接 Fatal。
+					_ = readKeywordsFromCSV(t, p)
+					_ = os.Remove(p)
+				case 4:
+					if _, _, err := articleSvc.ListResults(context.Background(), 0, 64); err != nil {
+						errCh <- fmt.Errorf("listresults w%d i%d: %w", id, i, err)
+						return
+					}
+				}
+				i++
+			}
+		}(w)
+	}
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+	close(panicCh)
+
+	for p := range panicCh {
+		t.Fatalf("high-concurrency load panicked: %s", p)
+	}
+	for e := range errCh {
+		t.Fatalf("high-concurrency load error: %v", e)
+	}
+
+	// 负载结束后 store 不再被修改，此时做一次完整的一致性断言：
+	// 导出的 CSV 必须与 store 快照逐篇、逐词对应。
+	finalSnap := memStore.Snapshot(context.Background())
+	finalPath := filepath.Join(t.TempDir(), "load-final.csv")
+	if err := exportSvc.ExportCSV(finalPath); err != nil {
+		t.Fatalf("final ExportCSV error: %v", err)
+	}
+	assertCSVMatchesStore(t, "load-final-after-concurrency",
+		readKeywordsFromCSV(t, finalPath), finalSnap)
 }

@@ -1,12 +1,8 @@
 package cache
 
 import (
-	"container/list"
-
 	"summarizer/internal/model"
 )
-
-var sharedBuf []*model.AnalysisResult
 
 type ResultCache struct {
 	lru *LRU
@@ -61,50 +57,23 @@ func (c *ResultCache) DirtyPut(r *model.AnalysisResult) {
 		el := c.lru.order.PushFront(&lruEntry{key: r.ArticleID, value: r})
 		c.lru.items[r.ArticleID] = el
 	}
-
-	if cap(sharedBuf) == 0 {
-		sharedBuf = make([]*model.AnalysisResult, 0, c.lru.order.Len()+4)
-	}
-	sharedBuf = sharedBuf[:0]
-	for e := c.lru.order.Front(); e != nil; e = e.Next() {
-		entry := e.Value.(*lruEntry)
-		if ar, ok := entry.value.(*model.AnalysisResult); ok {
-			sharedBuf = append(sharedBuf, ar)
-		}
-	}
 }
 
+// Snapshot 返回当前缓存中所有结果的独立副本切片。
+// 返回的切片拥有独立底层数组，调用方可安全持有与遍历，
+// 不会与后续并发的 Put/Snapshot 互相覆盖。
 func (c *ResultCache) Snapshot() []*model.AnalysisResult {
 	c.lru.mu.Lock()
 	defer c.lru.mu.Unlock()
 
-	n := c.lru.order.Len()
-	if cap(sharedBuf) < n {
-		sharedBuf = make([]*model.AnalysisResult, 0, n)
-	}
-	sharedBuf = sharedBuf[:0]
+	out := make([]*model.AnalysisResult, 0, c.lru.order.Len())
 	for e := c.lru.order.Front(); e != nil; e = e.Next() {
 		entry := e.Value.(*lruEntry)
 		if ar, ok := entry.value.(*model.AnalysisResult); ok {
-			sharedBuf = append(sharedBuf, ar)
+			out = append(out, ar)
 		}
 	}
-	out := sharedBuf[:len(sharedBuf)]
 	return out
-}
-
-func (c *ResultCache) RefreshEntry(id string, mutator func(r *model.AnalysisResult)) {
-	c.lru.mu.Lock()
-	defer c.lru.mu.Unlock()
-	el, ok := c.lru.items[id]
-	if !ok {
-		return
-	}
-	ar, ok := el.Value.(*lruEntry).value.(*model.AnalysisResult)
-	if !ok || ar == nil {
-		return
-	}
-	mutator(ar)
 }
 
 func (c *ResultCache) Keys() []string {
@@ -116,5 +85,3 @@ func (c *ResultCache) Keys() []string {
 	}
 	return keys
 }
-
-var _ = list.New
