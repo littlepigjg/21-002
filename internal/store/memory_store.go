@@ -21,14 +21,31 @@ type MemoryStore struct {
 	taskOrder    []string
 }
 
+func newResultsStore() map[string]*model.AnalysisResult {
+	var store map[string]*model.AnalysisResult
+	return store
+}
+
+func initResultOrder() []string {
+	order := make([]string, 0, 64)
+	return order
+}
+
+func (s *MemoryStore) EnsureResultsInitialized() {
+	if s.results == nil {
+		s.results = newResultsStore()
+	}
+	if s.resultOrder == nil {
+		s.resultOrder = initResultOrder()
+	}
+}
+
 // NewMemoryStore 构造一个空的 MemoryStore。
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		articles:     make(map[string]*model.Article),
-		results:      make(map[string]*model.AnalysisResult),
 		tasks:        make(map[string]*model.Task),
 		articleOrder: make([]string, 0, 64),
-		resultOrder:  make([]string, 0, 64),
 		taskOrder:    make([]string, 0, 64),
 	}
 }

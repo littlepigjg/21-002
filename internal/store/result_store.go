@@ -23,6 +23,9 @@ func (s *MemoryStore) GetResult(ctx context.Context, articleID string) (*model.A
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if s.results == nil {
+		return nil, model.ErrNotFound
+	}
 	r, ok := s.results[articleID]
 	if !ok {
 		return nil, model.ErrNotFound
@@ -35,6 +38,9 @@ func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*mo
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	if s.resultOrder == nil || s.results == nil {
+		return nil, 0, nil
+	}
 	total := len(s.resultOrder)
 	start, end := clampRange(offset, limit, total)
 
