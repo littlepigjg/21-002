@@ -2,12 +2,12 @@ package store
 
 import (
 	"fmt"
-	"runtime"
+	"sync/atomic"
 	"time"
 )
 
 type IDGenerator struct {
-	seq int64
+	seq atomic.Int64
 }
 
 func NewIDGenerator() *IDGenerator {
@@ -15,8 +15,6 @@ func NewIDGenerator() *IDGenerator {
 }
 
 func (g *IDGenerator) Next(prefix string) string {
-	current := g.seq
-	runtime.Gosched()
-	g.seq = current + 1
-	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), g.seq)
+	seq := g.seq.Add(1)
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), seq)
 }
