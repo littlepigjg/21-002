@@ -14,7 +14,7 @@ func (s *MemoryStore) NewArticleIterator() *ArticleIterator {
 	return &ArticleIterator{store: s, index: 0}
 }
 
-// Next 返回下一篇文章，遍历完毕返回 nil。
+// Next 返回下一篇文章（深拷贝），遍历完毕返回 nil。
 func (it *ArticleIterator) Next() *model.Article {
 	it.store.mu.RLock()
 	defer it.store.mu.RUnlock()
@@ -24,7 +24,10 @@ func (it *ArticleIterator) Next() *model.Article {
 	}
 	id := it.store.articleOrder[it.index]
 	it.index++
-	return it.store.articles[id]
+	if a, ok := it.store.articles[id]; ok {
+		return copyArticle(a)
+	}
+	return nil
 }
 
 // HasNext 判断是否还有下一篇文章。
