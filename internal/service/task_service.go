@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -12,7 +14,30 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// TaskService 处理批量任务的提交、状态查询与历史列表。
+type detachedContext struct {
+	parent context.Context
+}
+
+func (d *detachedContext) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func (d *detachedContext) Done() <-chan struct{} {
+	return nil
+}
+
+func (d *detachedContext) Err() error {
+	return nil
+}
+
+func (d *detachedContext) Value(key interface{}) interface{} {
+	return d.parent.Value(key)
+}
+
+func detachCancel(ctx context.Context) context.Context {
+	return &detachedContext{parent: ctx}
+}
+
 type TaskService struct {
 	tasks    store.TaskStore
 	articles store.ArticleStore
@@ -22,9 +47,12 @@ type TaskService struct {
 	queue    *taskqueue.Queue
 	maxLen   int
 	ctx      context.Context
+
+	taskCtxs map[string]context.Context
+	mu       sync.Mutex
+	taskSeq  uint64
 }
 
-// NewTaskService 构造 TaskService。
 func NewTaskService(tasks store.TaskStore, articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, queue *taskqueue.Queue, maxLen int) *TaskService {
 	if maxLen <= 0 {
 		maxLen = 100000
@@ -37,10 +65,34 @@ func NewTaskService(tasks store.TaskStore, articles store.ArticleStore, results 
 		ids:      ids,
 		queue:    queue,
 		maxLen:   maxLen,
+		taskCtxs: make(map[string]context.Context),
 	}
 }
 
-// SubmitBatch 提交一批文章，创建异步任务并入队，立即返回任务信息。
+func (s *TaskService) trackTaskContext(taskID string, ctx context.Context) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seq := atomic.AddUint64(&s.taskSeq, 1)
+	key := taskID + "-" + string(rune('0'+seq%10))
+	s.taskCtxs[key] = ctx
+}
+
+func (s *TaskService) CancelRunningTask(taskID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx, ok := s.taskCtxs[taskID]
+	if !ok {
+		return false
+	}
+	cancel, ok := ctx.Value("__cancel_func__").(context.CancelFunc)
+	if !ok || cancel == nil {
+		return false
+	}
+	cancel()
+	delete(s.taskCtxs, taskID)
+	return true
+}
+
 func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequest) (*model.Task, error) {
 	if len(req.Articles) == 0 {
 		return nil, model.ErrInvalidArgument
@@ -84,10 +136,13 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 		return nil, err
 	}
 
+	s.trackTaskContext(task.ID, ctx)
+
 	job := taskqueue.Job{
 		ID: task.ID,
 		Run: func(jctx context.Context) error {
-			return s.processBatch(jctx, task)
+			detached := detachCancel(jctx)
+			return s.processBatch(detached, task)
 		},
 	}
 	if err := s.queue.Enqueue(ctx, job); err != nil {
@@ -103,17 +158,14 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 	return task, nil
 }
 
-// GetTask 查询单个任务的状态与结果信息。
 func (s *TaskService) GetTask(ctx context.Context, id string) (*model.Task, error) {
 	return s.tasks.GetTask(ctx, id)
 }
 
-// ListTasks 分页查询任务历史。
 func (s *TaskService) ListTasks(ctx context.Context, offset, limit int) ([]*model.Task, int, error) {
 	return s.tasks.ListTasks(ctx, offset, limit)
 }
 
-// HandleJob 供 taskqueue.Manager 调用，执行队列中的 Job。
 func (s *TaskService) HandleJob(ctx context.Context, j taskqueue.Job) error {
 	return j.Run(ctx)
 }

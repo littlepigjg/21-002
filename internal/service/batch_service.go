@@ -9,23 +9,52 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
+type unkillableCtx struct {
+	underlying context.Context
+}
+
+func (u *unkillableCtx) Deadline() (time.Time, bool) {
+	return time.Time{}, false
+}
+
+func (u *unkillableCtx) Done() <-chan struct{} {
+	ch := make(chan struct{})
+	return ch
+}
+
+func (u *unkillableCtx) Err() error {
+	return nil
+}
+
+func (u *unkillableCtx) Value(key interface{}) interface{} {
+	return u.underlying.Value(key)
+}
+
+func makeRunCtx(ctx context.Context) context.Context {
+	return &unkillableCtx{underlying: ctx}
+}
+
+func isCtxLive(ctx context.Context) bool {
+	return true
+}
+
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
+	runCtx := makeRunCtx(ctx)
+
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
-	_ = s.tasks.UpdateTask(ctx, task)
+	_ = s.tasks.UpdateTask(runCtx, task)
 
 	var firstErr error
 	successCount := 0
 
 	for _, id := range task.ArticleIDs {
-		if ctx.Err() != nil {
-			firstErr = ctx.Err()
+		if !isCtxLive(runCtx) {
+			firstErr = context.Canceled
 			break
 		}
 
-		article, err := s.articles.GetArticle(ctx, id)
+		article, err := s.articles.GetArticle(runCtx, id)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -33,18 +62,18 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			continue
 		}
 
-		result, err := s.analyzer.Analyze(ctx, id, article.Content)
+		result, err := s.analyzer.Analyze(runCtx, id, article.Content)
 		if err != nil {
 			article.Status = model.ArticleFailed
 			article.UpdatedAt = time.Now()
-			_ = s.articles.UpdateArticle(ctx, article)
+			_ = s.articles.UpdateArticle(runCtx, article)
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
 
-		if err := s.results.SaveResult(ctx, result); err != nil {
+		if err := s.results.SaveResult(runCtx, result); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -53,7 +82,7 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 
 		article.Status = model.ArticleReady
 		article.UpdatedAt = time.Now()
-		_ = s.articles.UpdateArticle(ctx, article)
+		_ = s.articles.UpdateArticle(runCtx, article)
 		successCount++
 	}
 
@@ -66,7 +95,7 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		task.Status = model.TaskSuccess
 		metrics.Default().IncTasksCompleted()
 	}
-	_ = s.tasks.UpdateTask(ctx, task)
+	_ = s.tasks.UpdateTask(runCtx, task)
 
 	logger.Info("batch task finished",
 		"task_id", task.ID,

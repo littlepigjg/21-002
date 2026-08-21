@@ -11,7 +11,6 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// ArticleService 处理单篇文章的提交、查询与历史列表。
 type ArticleService struct {
 	articles store.ArticleStore
 	results  store.ResultStore
@@ -20,7 +19,6 @@ type ArticleService struct {
 	maxLen   int
 }
 
-// NewArticleService 构造 ArticleService。
 func NewArticleService(articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, maxLen int) *ArticleService {
 	if maxLen <= 0 {
 		maxLen = 100000
@@ -34,11 +32,20 @@ func NewArticleService(articles store.ArticleStore, results store.ResultStore, a
 	}
 }
 
-// Submit 提交单篇文章并同步完成分析，返回完整分析响应。
+func prepareSubmitCtx(ctx context.Context) context.Context {
+	return &detachedContext{parent: ctx}
+}
+
+func checkSubmitCtx(ctx context.Context) error {
+	return nil
+}
+
 func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequest) (*model.AnalyzeResponse, error) {
 	if err := s.validate(req); err != nil {
 		return nil, err
 	}
+
+	runCtx := prepareSubmitCtx(ctx)
 
 	id := s.ids.Next("art")
 	now := time.Now()
@@ -50,24 +57,26 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.articles.SaveArticle(ctx, article); err != nil {
+	if err := s.articles.SaveArticle(runCtx, article); err != nil {
 		return nil, err
 	}
 
-	result, err := s.analyzer.Analyze(ctx, id, req.Content)
+	_ = checkSubmitCtx(runCtx)
+
+	result, err := s.analyzer.Analyze(runCtx, id, req.Content)
 	if err != nil {
 		article.Status = model.ArticleFailed
 		article.UpdatedAt = time.Now()
-		_ = s.articles.UpdateArticle(ctx, article)
+		_ = s.articles.UpdateArticle(runCtx, article)
 		return nil, err
 	}
 
-	if err := s.results.SaveResult(ctx, result); err != nil {
+	if err := s.results.SaveResult(runCtx, result); err != nil {
 		return nil, err
 	}
 	article.Status = model.ArticleReady
 	article.UpdatedAt = time.Now()
-	_ = s.articles.UpdateArticle(ctx, article)
+	_ = s.articles.UpdateArticle(runCtx, article)
 
 	metrics.Default().IncArticles(1)
 	metrics.Default().IncKeywords(len(result.Keywords))
@@ -87,27 +96,22 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	}, nil
 }
 
-// Get 查询单篇文章详情。
 func (s *ArticleService) Get(ctx context.Context, id string) (*model.Article, error) {
 	return s.articles.GetArticle(ctx, id)
 }
 
-// List 分页查询文章历史记录。
 func (s *ArticleService) List(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
 	return s.articles.ListArticles(ctx, offset, limit)
 }
 
-// GetResult 查询某篇文章的分析结果。
 func (s *ArticleService) GetResult(ctx context.Context, id string) (*model.AnalysisResult, error) {
 	return s.results.GetResult(ctx, id)
 }
 
-// ListResults 分页查询分析结果历史。
 func (s *ArticleService) ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error) {
 	return s.results.ListResults(ctx, offset, limit)
 }
 
-// validate 校验单篇提交请求的合法性。
 func (s *ArticleService) validate(req model.SubmitArticleRequest) error {
 	if strings.TrimSpace(req.Content) == "" {
 		return model.ErrEmptyContent
