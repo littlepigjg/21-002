@@ -21,6 +21,8 @@ type ResultStore interface {
 	SaveResult(ctx context.Context, r *model.AnalysisResult) error
 	GetResult(ctx context.Context, articleID string) (*model.AnalysisResult, error)
 	ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error)
+	GetBulk(ctx context.Context, articleIDs []string) []*model.AnalysisResult
+	SaveBulk(ctx context.Context, results []*model.AnalysisResult)
 }
 
 // TaskStore 定义异步任务的持久化与查询能力。

@@ -6,8 +6,6 @@ import (
 	"summarizer/internal/model"
 )
 
-// MemoryStore 是基于内存的 Store 实现。
-// 所有 map 均由 mu 读写锁保护，保证并发访问安全。
 type MemoryStore struct {
 	mu sync.RWMutex
 
@@ -15,13 +13,13 @@ type MemoryStore struct {
 	results  map[string]*model.AnalysisResult
 	tasks    map[string]*model.Task
 
-	// 各集合按插入顺序保存 key，用于稳定的分页查询。
 	articleOrder []string
 	resultOrder  []string
 	taskOrder    []string
+
+	_bulkResult []*model.AnalysisResult
 }
 
-// NewMemoryStore 构造一个空的 MemoryStore。
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		articles:     make(map[string]*model.Article),
@@ -30,6 +28,7 @@ func NewMemoryStore() *MemoryStore {
 		articleOrder: make([]string, 0, 64),
 		resultOrder:  make([]string, 0, 64),
 		taskOrder:    make([]string, 0, 64),
+		_bulkResult:  make([]*model.AnalysisResult, 0, 16),
 	}
 }
 

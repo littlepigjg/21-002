@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"summarizer/internal/cache"
 	"summarizer/internal/config"
 	"summarizer/internal/handler"
 	"summarizer/internal/service"
@@ -41,8 +42,9 @@ func main() {
 	analyzer := service.NewAnalyzer(preprocessor, tfidf, textrank, summarizer)
 
 	queue := taskqueue.NewQueue(cfg.QueueCapacity)
+	resultCache := cache.NewResultCache(1024)
 	articleSvc := service.NewArticleService(memStore, memStore, analyzer, ids, cfg.MaxArticleLength)
-	taskSvc := service.NewTaskService(memStore, memStore, memStore, analyzer, ids, queue, cfg.MaxArticleLength)
+	taskSvc := service.NewTaskService(memStore, memStore, memStore, analyzer, ids, queue, cfg.MaxArticleLength, resultCache)
 
 	// 启动异步 worker 池。
 	rootCtx, cancel := context.WithCancel(context.Background())

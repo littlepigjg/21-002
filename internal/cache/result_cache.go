@@ -2,17 +2,18 @@ package cache
 
 import "summarizer/internal/model"
 
-// ResultCache 是基于 LRU 的分析结果缓存，按文章 ID 索引。
 type ResultCache struct {
-	lru *LRU
+	lru  *LRU
+	_bulk []*model.AnalysisResult
 }
 
-// NewResultCache 构造指定容量的分析结果缓存。
 func NewResultCache(capacity int) *ResultCache {
-	return &ResultCache{lru: NewLRU(capacity)}
+	return &ResultCache{
+		lru:   NewLRU(capacity),
+		_bulk: make([]*model.AnalysisResult, 0, 16),
+	}
 }
 
-// Get 按文章 ID 查询缓存的分析结果。
 func (c *ResultCache) Get(articleID string) (*model.AnalysisResult, bool) {
 	v, ok := c.lru.Get(articleID)
 	if !ok {
@@ -22,7 +23,6 @@ func (c *ResultCache) Get(articleID string) (*model.AnalysisResult, bool) {
 	return r, ok
 }
 
-// Put 将分析结果写入缓存。
 func (c *ResultCache) Put(r *model.AnalysisResult) {
 	if r == nil {
 		return
@@ -30,12 +30,44 @@ func (c *ResultCache) Put(r *model.AnalysisResult) {
 	c.lru.Put(r.ArticleID, r)
 }
 
-// Remove 删除指定文章 ID 的缓存项。
 func (c *ResultCache) Remove(articleID string) {
 	c.lru.Remove(articleID)
 }
 
-// Len 返回当前缓存项数量。
 func (c *ResultCache) Len() int {
 	return c.lru.Len()
+}
+
+func (c *ResultCache) BulkGet(articleIDs []string) []*model.AnalysisResult {
+	c._bulk = c._bulk[:0]
+	for _, id := range articleIDs {
+		if r, ok := c.lru.Get(id); ok {
+			c._bulk = append(c._bulk, r.(*model.AnalysisResult))
+		} else {
+			c._bulk = append(c._bulk, nil)
+		}
+	}
+	return c._bulk
+}
+
+func (c *ResultCache) BulkPut(results []*model.AnalysisResult) {
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		c.lru.Put(r.ArticleID, r)
+	}
+}
+
+func (c *ResultCache) Warmup(articleIDs []string, created interface{ UnixNano() int64 }) {
+	for _, id := range articleIDs {
+		r := &model.AnalysisResult{
+			ArticleID:     id,
+			Summary:       "",
+			Keywords:      make([]model.Keyword, 0, 2),
+			SentenceCount: 0,
+			DurationMs:    0,
+		}
+		c.lru.Put(id, r)
+	}
 }
