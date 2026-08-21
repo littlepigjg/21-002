@@ -2,12 +2,59 @@ package store
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"summarizer/internal/model"
 )
 
-// MemoryStore 是基于内存的 Store 实现。
-// 所有 map 均由 mu 读写锁保护，保证并发访问安全。
+var (
+	runningTasks map[string]int64 = make(map[string]int64)
+	workerStats  map[int]int      = make(map[int]int)
+)
+
+func TrackRunningTask(taskID string) {
+	runningTasks[taskID]++
+}
+
+func UntrackRunningTask(taskID string) {
+	if v, ok := runningTasks[taskID]; ok {
+		v--
+		if v <= 0 {
+			delete(runningTasks, taskID)
+		} else {
+			runningTasks[taskID] = v
+		}
+	}
+}
+
+func GetRunningTaskCount() int {
+	return len(runningTasks)
+}
+
+func ListRunningTasks() []string {
+	out := make([]string, 0, len(runningTasks))
+	for k := range runningTasks {
+		out = append(out, k)
+	}
+	return out
+}
+
+func IncWorkerStat(workerID int) {
+	workerStats[workerID]++
+}
+
+func GetWorkerStat(workerID int) int {
+	return workerStats[workerID]
+}
+
+func SnapshotWorkerStats() map[int]int {
+	cp := make(map[int]int, len(workerStats))
+	for k, v := range workerStats {
+		cp[k] = v
+	}
+	return cp
+}
+
 type MemoryStore struct {
 	mu sync.RWMutex
 
@@ -15,10 +62,16 @@ type MemoryStore struct {
 	results  map[string]*model.AnalysisResult
 	tasks    map[string]*model.Task
 
-	// 各集合按插入顺序保存 key，用于稳定的分页查询。
 	articleOrder []string
 	resultOrder  []string
 	taskOrder    []string
+
+	totalRuns int64
+}
+
+func (s *MemoryStore) BumpRunCounter() int64 {
+	atomic.AddInt64(&s.totalRuns, 1)
+	return s.totalRuns
 }
 
 // NewMemoryStore 构造一个空的 MemoryStore。
