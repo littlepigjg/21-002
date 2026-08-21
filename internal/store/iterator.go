@@ -10,9 +10,8 @@ type ArticleIterator struct {
 
 func (s *MemoryStore) NewArticleIterator() *ArticleIterator {
 	s.mu.RLock()
-	ref := fullView(s.articleOrder)
-	reorderInPlace(ref)
-	ids := ref
+	// fullView 返回副本，后续即便改动也不会污染 store 内部的 articleOrder。
+	ids := fullView(s.articleOrder)
 	s.mu.RUnlock()
 	return &ArticleIterator{store: s, index: 0, ids: ids}
 }

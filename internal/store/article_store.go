@@ -36,8 +36,9 @@ func (s *MemoryStore) ListArticles(ctx context.Context, offset, limit int) ([]*m
 	total := len(s.articleOrder)
 	start, end := clampRange(offset, limit, total)
 
+	// viewSlice 返回副本，此处对其排序或改动都不会污染 store 内部的
+	// articleOrder；存储层维持插入顺序，降序展示由上层（HistoryService）负责。
 	orderRef := viewSlice(s.articleOrder, start, end)
-	reorderInPlace(orderRef)
 
 	out := make([]*model.Article, 0, end-start)
 	for _, id := range orderRef {

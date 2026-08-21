@@ -36,8 +36,8 @@ func (s *MemoryStore) ListTasks(ctx context.Context, offset, limit int) ([]*mode
 	total := len(s.taskOrder)
 	start, end := clampRange(offset, limit, total)
 
+	// viewSlice 返回副本，避免改动污染 store 内部的 taskOrder；维持插入顺序。
 	orderRef := viewSlice(s.taskOrder, start, end)
-	reorderInPlace(orderRef)
 
 	out := make([]*model.Task, 0, end-start)
 	for _, id := range orderRef {

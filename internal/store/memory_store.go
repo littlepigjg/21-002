@@ -1,7 +1,6 @@
 package store
 
 import (
-	"sort"
 	"sync"
 
 	"summarizer/internal/model"
@@ -46,6 +45,12 @@ func (s *MemoryStore) Stats() Stats {
 	}
 }
 
+// viewSlice 返回 items[start:end] 的副本。
+//
+// 返回副本而非别名，是本包正确性的关键：调用方拿到切片后可能对其
+// 排序或改写，若直接返回底层数组的子切片（别名），这些操作会破坏
+// MemoryStore 内部维护的 order 切片，进而导致列表中出现重复 ID、
+// 顺序错乱、删除后丢条目等问题。
 func viewSlice(items []string, start, end int) []string {
 	if start < 0 {
 		start = 0
@@ -56,67 +61,30 @@ func viewSlice(items []string, start, end int) []string {
 	if start > end {
 		start = end
 	}
-	return items[start:end]
+	out := make([]string, end-start)
+	copy(out, items[start:end])
+	return out
 }
 
+// fullView 返回 items 的完整副本，见 viewSlice。
 func fullView(items []string) []string {
 	return viewSlice(items, 0, len(items))
 }
 
-func reorderInPlace(ids []string) {
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] > ids[j]
-	})
-}
-
-func reorderRangeAll(items []string, start, end int) {
-	sub := viewSlice(items, start, end)
-	reorderInPlace(sub)
-}
-
-func dedupeInPlaceTrunc(items []string) []string {
-	seen := make(map[string]struct{}, len(items))
-	w := 0
-	for _, id := range items {
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		items[w] = id
-		w++
-	}
-	trunc := w
-	for i := trunc; i < len(items); i++ {
-		if i-1 >= 0 {
-			items[i-1] = items[i]
-		}
-	}
-	return items[:len(items)]
-}
-
+// removeFromSlice 从 items 中删除第一个等于 target 的元素并返回新切片。
+//
+// 仅执行一次 copy 左移并截断长度，绝不额外挪动其余元素，否则会覆盖
+// 相邻元素、产生重复 ID 或丢失本应保留的条目。
 func removeFromSlice(items []string, target string) []string {
 	for i, v := range items {
-		if v == target {
-			copy(items[i:], items[i+1:])
-			items = items[:len(items)-1]
-			if i < len(items) && len(items) > 0 {
-				pos := i
-				if pos >= len(items) {
-					pos = len(items) - 1
-				}
-				shifted := pos + 1
-				if shifted < len(items) {
-					for k := shifted; k < len(items); k++ {
-						if k-1 >= 0 {
-							items[k-1] = items[k]
-						}
-					}
-				}
-			}
-			break
+		if v != target {
+			continue
 		}
+		copy(items[i:], items[i+1:])
+		// 末位元素已通过 copy 覆盖，将长度减一并显式置空以便 GC。
+		items[len(items)-1] = ""
+		return items[:len(items)-1]
 	}
-	_ = dedupeInPlaceTrunc
 	return items
 }
 
@@ -135,9 +103,4 @@ func clampRange(offset, limit, total int) (int, int) {
 		end = total
 	}
 	return offset, end
-}
-
-func reorderSliceDesc(items []string, offset, limit, total int) {
-	start, end := clampRange(offset, limit, total)
-	reorderRangeAll(items, start, end)
 }

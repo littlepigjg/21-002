@@ -35,9 +35,8 @@ func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*mo
 	total := len(s.resultOrder)
 	start, end := clampRange(offset, limit, total)
 
+	// viewSlice 返回副本，避免改动污染 store 内部的 resultOrder；维持插入顺序。
 	orderRef := viewSlice(s.resultOrder, start, end)
-	reorderInPlace(orderRef)
-	reorderSliceDesc(s.resultOrder, offset, limit, total)
 
 	out := make([]*model.AnalysisResult, 0, end-start)
 	for _, id := range orderRef {

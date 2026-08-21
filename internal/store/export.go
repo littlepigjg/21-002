@@ -23,7 +23,6 @@ func (s *MemoryStore) Snapshot(ctx context.Context) Snapshot {
 	}
 
 	articleIDs := fullView(s.articleOrder)
-	reorderInPlace(articleIDs)
 	for _, id := range articleIDs {
 		if a, ok := s.articles[id]; ok {
 			snap.Articles = append(snap.Articles, a)
@@ -31,7 +30,6 @@ func (s *MemoryStore) Snapshot(ctx context.Context) Snapshot {
 	}
 
 	resultIDs := fullView(s.resultOrder)
-	reorderInPlace(resultIDs)
 	for _, id := range resultIDs {
 		if r, ok := s.results[id]; ok {
 			snap.Results = append(snap.Results, r)
@@ -39,7 +37,6 @@ func (s *MemoryStore) Snapshot(ctx context.Context) Snapshot {
 	}
 
 	taskIDs := fullView(s.taskOrder)
-	reorderInPlace(taskIDs)
 	for _, id := range taskIDs {
 		if t, ok := s.tasks[id]; ok {
 			snap.Tasks = append(snap.Tasks, t)
