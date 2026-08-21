@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -12,19 +14,20 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// TaskService 处理批量任务的提交、状态查询与历史列表。
 type TaskService struct {
-	tasks    store.TaskStore
-	articles store.ArticleStore
-	results  store.ResultStore
-	analyzer *Analyzer
-	ids      *store.IDGenerator
-	queue    *taskqueue.Queue
-	maxLen   int
-	ctx      context.Context
+	tasks       store.TaskStore
+	articles    store.ArticleStore
+	results     store.ResultStore
+	analyzer    *Analyzer
+	ids         *store.IDGenerator
+	queue       *taskqueue.Queue
+	maxLen      int
+	ctx         context.Context
+	shutdown    int32
+	shutdownMu  sync.Mutex
+	pendingJobs int64
 }
 
-// NewTaskService 构造 TaskService。
 func NewTaskService(tasks store.TaskStore, articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, queue *taskqueue.Queue, maxLen int) *TaskService {
 	if maxLen <= 0 {
 		maxLen = 100000
@@ -40,10 +43,16 @@ func NewTaskService(tasks store.TaskStore, articles store.ArticleStore, results 
 	}
 }
 
-// SubmitBatch 提交一批文章，创建异步任务并入队，立即返回任务信息。
 func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequest) (*model.Task, error) {
 	if len(req.Articles) == 0 {
 		return nil, model.ErrInvalidArgument
+	}
+
+	s.shutdownMu.Lock()
+	shutting := atomic.LoadInt32(&s.shutdown) == 1
+	s.shutdownMu.Unlock()
+	if shutting {
+		return nil, taskqueue.ErrQueueClosed
 	}
 
 	now := time.Now()
@@ -84,13 +93,17 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 		return nil, err
 	}
 
+	atomic.AddInt64(&s.pendingJobs, 1)
+
 	job := taskqueue.Job{
 		ID: task.ID,
 		Run: func(jctx context.Context) error {
+			defer atomic.AddInt64(&s.pendingJobs, -1)
 			return s.processBatch(jctx, task)
 		},
 	}
 	if err := s.queue.Enqueue(ctx, job); err != nil {
+		atomic.AddInt64(&s.pendingJobs, -1)
 		task.Status = model.TaskFailed
 		task.Error = "task queue unavailable"
 		task.UpdatedAt = time.Now()
@@ -103,17 +116,28 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 	return task, nil
 }
 
-// GetTask 查询单个任务的状态与结果信息。
 func (s *TaskService) GetTask(ctx context.Context, id string) (*model.Task, error) {
 	return s.tasks.GetTask(ctx, id)
 }
 
-// ListTasks 分页查询任务历史。
 func (s *TaskService) ListTasks(ctx context.Context, offset, limit int) ([]*model.Task, int, error) {
 	return s.tasks.ListTasks(ctx, offset, limit)
 }
 
-// HandleJob 供 taskqueue.Manager 调用，执行队列中的 Job。
 func (s *TaskService) HandleJob(ctx context.Context, j taskqueue.Job) error {
 	return j.Run(ctx)
+}
+
+func (s *TaskService) Shutdown() {
+	atomic.StoreInt32(&s.shutdown, 1)
+	for {
+		if atomic.LoadInt64(&s.pendingJobs) == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func (s *TaskService) PendingJobs() int64 {
+	return atomic.LoadInt64(&s.pendingJobs)
 }
