@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"summarizer/internal/model"
@@ -90,4 +92,26 @@ func TestBugNilInterface_ArticleExists(t *testing.T) {
 	}
 
 	t.Logf("GREEN（绿灯，缺陷已修复）- existing article correctly returned with valid data")
+}
+
+// TestArticleHandler_Get_NotFound 验证 GET /api/v1/articles/{id} 查询不存在的 ID 时
+// 返回 HTTP 404 而非 500（线上 nil pointer dereference 回归用例）。
+func TestArticleHandler_Get_NotFound(t *testing.T) {
+	memStore := store.NewMemoryStore()
+	analyzer := &service.Analyzer{}
+	ids := store.NewIDGenerator()
+	articleSvc := service.NewArticleService(memStore, memStore, analyzer, ids, 100000)
+	h := NewArticleHandler(articleSvc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/articles/does-not-exist", nil)
+	req.SetPathValue("id", "does-not-exist")
+	rec := httptest.NewRecorder()
+
+	h.Get(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("RED（红灯，缺陷未修复）- expected HTTP 404 for non-existent article, got %d (body=%q)",
+			rec.Code, rec.Body.String())
+	}
+	t.Logf("GREEN（绿灯，缺陷已修复）- non-existent article correctly returned HTTP %d", rec.Code)
 }

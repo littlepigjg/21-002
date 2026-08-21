@@ -88,8 +88,16 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 }
 
 // Get 查询单篇文章详情。
+//
+// 未命中时 store 返回的 ArticleResult 中 article 为 nil；此处将其重建为
+// 保证非 nil 的占位 Article（仅含 ID）并带上未命中错误，避免上层在拿到
+// nil 指针后直接解引用字段而触发 panic。命中时原样透传 store 结果。
 func (s *ArticleService) Get(ctx context.Context, id string) model.ArticleResult {
-	return s.articles.GetArticle(ctx, id)
+	result := s.articles.GetArticle(ctx, id)
+	if result.GetError() != nil || !result.HasArticle() {
+		return model.NewArticleResult(&model.Article{ID: id}, result.GetError())
+	}
+	return result
 }
 
 // GetArticleOrError 查询文章并返回 (article, error) 兼容格式。

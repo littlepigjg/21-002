@@ -51,6 +51,10 @@ func (h *ArticleHandler) Submit(w http.ResponseWriter, r *http.Request) {
 func (h *ArticleHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	result := h.articles.Get(r.Context(), id)
+	if err := result.GetError(); err != nil {
+		response.FailErr(w, err)
+		return
+	}
 	article := result.GetArticle()
 	ready, _ := h.articles.CheckArticleReady(r.Context(), id)
 	response.OK(w, map[string]interface{}{
