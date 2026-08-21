@@ -13,8 +13,8 @@ type Snapshot struct {
 	Tasks    []*model.Task
 }
 
-// Snapshot 返回当前存储中所有数据的浅拷贝，按插入顺序排列。
-// 该操作持有读锁，返回后释放；调用方不应修改返回对象内部字段。
+// Snapshot 返回当前存储中所有数据的深拷贝快照，按插入顺序排列。
+// 该操作持有读锁，返回后释放；元素均为克隆指针，调用方可安全修改。
 func (s *MemoryStore) Snapshot(ctx context.Context) Snapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -27,17 +27,17 @@ func (s *MemoryStore) Snapshot(ctx context.Context) Snapshot {
 
 	for _, id := range s.articleOrder {
 		if a, ok := s.articles[id]; ok {
-			snap.Articles = append(snap.Articles, a)
+			snap.Articles = append(snap.Articles, a.Clone())
 		}
 	}
 	for _, id := range s.resultOrder {
 		if r, ok := s.results[id]; ok {
-			snap.Results = append(snap.Results, r)
+			snap.Results = append(snap.Results, r.Clone())
 		}
 	}
 	for _, id := range s.taskOrder {
 		if t, ok := s.tasks[id]; ok {
-			snap.Tasks = append(snap.Tasks, t)
+			snap.Tasks = append(snap.Tasks, t.Clone())
 		}
 	}
 	return snap

@@ -16,8 +16,6 @@ type MemoryStore struct {
 	articleOrder []string
 	resultOrder  []string
 	taskOrder    []string
-
-	_bulkResult []*model.AnalysisResult
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -28,7 +26,6 @@ func NewMemoryStore() *MemoryStore {
 		articleOrder: make([]string, 0, 64),
 		resultOrder:  make([]string, 0, 64),
 		taskOrder:    make([]string, 0, 64),
-		_bulkResult:  make([]*model.AnalysisResult, 0, 16),
 	}
 }
 

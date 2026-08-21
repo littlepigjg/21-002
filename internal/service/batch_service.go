@@ -58,16 +58,23 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		}
 
 		if merged[i] == nil {
+			// 未命中缓存/存储：直接采用本次分析产出（分析器每次新建的私有指针）。
 			merged[i] = result
 		} else {
-			merged[i].Summary = fmt.Sprintf("[task:%s] %s", task.ID, result.Summary)
-			merged[i].SentenceCount = result.SentenceCount
-			merged[i].DurationMs = result.DurationMs
-			merged[i].Keywords = append(merged[i].Keywords, result.Keywords...)
-			merged[i].Keywords = append(merged[i].Keywords, model.Keyword{
-				Word:  markerTag,
-				Score: 0.0,
-			})
+			// 已有结果：基于本次分析构建全新的 AnalysisResult，只叠加一个 [task:] 前缀与一个 marker。
+			// 不复用也不就地改写既有指针（它来自缓存/存储，可能是别处共享的克隆），
+			// 避免并发批量任务共享文章 ID 时在同一指针上 append 导致 marker/前缀重复与数据竞争。
+			kw := make([]model.Keyword, 0, len(result.Keywords)+1)
+			kw = append(kw, result.Keywords...)
+			kw = append(kw, model.Keyword{Word: markerTag, Score: 0.0})
+			merged[i] = &model.AnalysisResult{
+				ArticleID:     id,
+				Summary:       fmt.Sprintf("[task:%s] %s", task.ID, result.Summary),
+				Keywords:      kw,
+				SentenceCount: result.SentenceCount,
+				DurationMs:    result.DurationMs,
+				CreatedAt:     result.CreatedAt,
+			}
 		}
 
 		article.Status = model.ArticleReady

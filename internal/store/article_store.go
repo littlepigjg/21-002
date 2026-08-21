@@ -20,6 +20,7 @@ func (s *MemoryStore) SaveArticle(ctx context.Context, a *model.Article) error {
 }
 
 // GetArticle 按 ID 查询文章，不存在时返回 ErrNotFound。
+// 返回克隆指针，避免调用方与并发写入共享同一对象引发数据竞争。
 func (s *MemoryStore) GetArticle(ctx context.Context, id string) (*model.Article, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -28,10 +29,11 @@ func (s *MemoryStore) GetArticle(ctx context.Context, id string) (*model.Article
 	if !ok {
 		return nil, model.ErrNotFound
 	}
-	return a, nil
+	return a.Clone(), nil
 }
 
 // ListArticles 按插入顺序分页返回文章及其总数。
+// 返回的切片元素为克隆指针，与存储内部状态互不影响。
 func (s *MemoryStore) ListArticles(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -42,7 +44,7 @@ func (s *MemoryStore) ListArticles(ctx context.Context, offset, limit int) ([]*m
 	out := make([]*model.Article, 0, end-start)
 	for _, id := range s.articleOrder[start:end] {
 		if a, ok := s.articles[id]; ok {
-			out = append(out, a)
+			out = append(out, a.Clone())
 		}
 	}
 	return out, total, nil

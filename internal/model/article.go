@@ -22,3 +22,13 @@ type Article struct {
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
 }
+
+// Clone 返回 a 的深拷贝。
+// Article 字段均为值类型，无需重建内部切片；返回新独立实例供调用方安全修改。
+func (a *Article) Clone() *Article {
+	if a == nil {
+		return nil
+	}
+	cp := *a
+	return &cp
+}

@@ -33,3 +33,17 @@ type Task struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
+
+// Clone 返回 t 的深拷贝。
+// ArticleIDs 背数组被重建，调用方修改返回值不会影响原始任务。
+func (t *Task) Clone() *Task {
+	if t == nil {
+		return nil
+	}
+	cp := *t
+	if t.ArticleIDs != nil {
+		cp.ArticleIDs = make([]string, len(t.ArticleIDs))
+		copy(cp.ArticleIDs, t.ArticleIDs)
+	}
+	return &cp
+}
