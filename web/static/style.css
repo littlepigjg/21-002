@@ -1,0 +1,151 @@
+:root {
+  --bg: #f5f6fa;
+  --card: #ffffff;
+  --border: #e2e5ec;
+  --text: #24292f;
+  --muted: #667085;
+  --accent: #2f6fed;
+  --accent-dark: #1f55c4;
+  --danger: #c0392b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.topbar {
+  background: linear-gradient(135deg, #2f6fed, #4a3fd0);
+  color: #fff;
+  padding: 28px 32px;
+}
+
+.topbar h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
+}
+
+.subtitle {
+  margin: 0;
+  opacity: 0.85;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 20px;
+  padding: 24px 32px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.card h2 {
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+
+label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+button {
+  margin-top: 14px;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+button:hover {
+  background: var(--accent-dark);
+}
+
+.inline {
+  display: flex;
+  gap: 10px;
+}
+
+.inline input {
+  flex: 1;
+}
+
+.inline button {
+  margin-top: 0;
+}
+
+.result {
+  margin-top: 16px;
+  padding: 14px;
+  background: #0f172a;
+  color: #d7e3ff;
+  border-radius: 8px;
+  font-size: 12.5px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.list {
+  margin-top: 14px;
+}
+
+.list .item {
+  border-top: 1px solid var(--border);
+  padding: 12px 0;
+  font-size: 13px;
+}
+
+.list .item .title {
+  font-weight: 600;
+}
+
+.list .item .summary {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.list .item .kw {
+  color: var(--accent);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.footer {
+  padding: 18px 32px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}

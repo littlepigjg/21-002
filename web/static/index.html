@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>文章自动摘要与关键词提取系统</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>文章自动摘要与关键词提取系统</h1>
+    <p class="subtitle">TF-IDF 关键词提取 · TextRank 自动摘要 · 异步批量任务</p>
+  </header>
+
+  <main class="layout">
+    <section class="card">
+      <h2>单篇提交</h2>
+      <form id="single-form">
+        <label>标题</label>
+        <input id="single-title" type="text" placeholder="文章标题（可选）" />
+        <label>正文</label>
+        <textarea id="single-content" rows="10" placeholder="粘贴文章正文..."></textarea>
+        <button type="submit">提交并分析</button>
+      </form>
+      <pre id="single-result" class="result" hidden></pre>
+    </section>
+
+    <section class="card">
+      <h2>批量提交（异步）</h2>
+      <form id="batch-form">
+        <label>每行一篇文章，格式：标题|正文</label>
+        <textarea id="batch-content" rows="8" placeholder="标题1|正文1&#10;标题2|正文2"></textarea>
+        <button type="submit">提交批量任务</button>
+      </form>
+      <pre id="batch-result" class="result" hidden></pre>
+    </section>
+
+    <section class="card">
+      <h2>任务状态查询</h2>
+      <div class="inline">
+        <input id="task-id" type="text" placeholder="输入任务 ID" />
+        <button id="query-task">查询</button>
+      </div>
+      <pre id="task-result" class="result" hidden></pre>
+    </section>
+
+    <section class="card">
+      <h2>历史记录</h2>
+      <button id="load-history">加载最近 20 条</button>
+      <div id="history-list" class="list"></div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>服务状态：</span>
+    <span id="health">检测中...</span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
