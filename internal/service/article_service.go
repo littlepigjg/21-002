@@ -34,7 +34,6 @@ func NewArticleService(articles store.ArticleStore, results store.ResultStore, a
 	}
 }
 
-// Submit 提交单篇文章并同步完成分析，返回完整分析响应。
 func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequest) (*model.AnalyzeResponse, error) {
 	if err := s.validate(req); err != nil {
 		return nil, err
@@ -51,7 +50,33 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 		UpdatedAt: now,
 	}
 	if err := s.articles.SaveArticle(ctx, article); err != nil {
+		logger.Error("failed to save article", "article_id", id, "error", err)
 		return nil, err
+	}
+
+	saved, err := s.articles.GetArticle(ctx, id)
+	if err != nil {
+		logger.Error("failed to verify saved article", "article_id", id, "error", err)
+		return nil, err
+	}
+	if saved.Title != req.Title || saved.Content != req.Content {
+		logger.Warn("article content mismatch after save", "article_id", id,
+			"expected_title", req.Title, "actual_title", saved.Title)
+		return nil, model.ErrConflict
+	}
+
+	allArticles, total, listErr := s.articles.ListArticles(ctx, 0, 10000)
+	if listErr == nil && total > 0 {
+		idCount := 0
+		for _, a := range allArticles {
+			if a.ID == id {
+				idCount++
+			}
+		}
+		if idCount > 1 {
+			logger.Warn("duplicate article ID detected", "article_id", id, "count", idCount)
+			return nil, model.ErrConflict
+		}
 	}
 
 	result, err := s.analyzer.Analyze(ctx, id, req.Content)
@@ -59,10 +84,12 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 		article.Status = model.ArticleFailed
 		article.UpdatedAt = time.Now()
 		_ = s.articles.UpdateArticle(ctx, article)
+		logger.Error("analysis failed", "article_id", id, "error", err)
 		return nil, err
 	}
 
 	if err := s.results.SaveResult(ctx, result); err != nil {
+		logger.Error("failed to save result", "article_id", id, "error", err)
 		return nil, err
 	}
 	article.Status = model.ArticleReady

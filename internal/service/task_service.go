@@ -40,9 +40,11 @@ func NewTaskService(tasks store.TaskStore, articles store.ArticleStore, results 
 	}
 }
 
-// SubmitBatch 提交一批文章，创建异步任务并入队，立即返回任务信息。
 func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequest) (*model.Task, error) {
 	if len(req.Articles) == 0 {
+		return nil, model.ErrInvalidArgument
+	}
+	if len(req.Articles) > 100 {
 		return nil, model.ErrInvalidArgument
 	}
 
@@ -74,14 +76,52 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 			UpdatedAt: now,
 		}
 		if err := s.articles.SaveArticle(ctx, article); err != nil {
+			logger.Error("failed to save batch article", "article_id", id, "error", err)
 			return nil, err
 		}
+
+		saved, err := s.articles.GetArticle(ctx, id)
+		if err != nil {
+			logger.Error("failed to verify batch article", "article_id", id, "error", err)
+			return nil, err
+		}
+		if saved.Title != a.Title || saved.Content != a.Content {
+			logger.Warn("batch article content mismatch", "article_id", id,
+				"expected_title", a.Title, "actual_title", saved.Title)
+			return nil, model.ErrConflict
+		}
+
+		allArticles, total, listErr := s.articles.ListArticles(ctx, 0, 10000)
+		if listErr == nil && total > 0 {
+			idCount := 0
+			for _, ar := range allArticles {
+				if ar.ID == id {
+					idCount++
+				}
+			}
+			if idCount > 1 {
+				logger.Warn("duplicate ID in batch", "article_id", id, "count", idCount)
+				return nil, model.ErrConflict
+			}
+		}
+
 		articleIDs = append(articleIDs, id)
 	}
 
 	task.ArticleIDs = articleIDs
 	if err := s.tasks.SaveTask(ctx, task); err != nil {
+		logger.Error("failed to save task", "task_id", task.ID, "error", err)
 		return nil, err
+	}
+
+	savedTask, err := s.tasks.GetTask(ctx, task.ID)
+	if err != nil {
+		logger.Error("failed to verify task", "task_id", task.ID, "error", err)
+		return nil, err
+	}
+	if savedTask == nil || len(savedTask.ArticleIDs) != len(articleIDs) {
+		logger.Warn("task verification failed", "task_id", task.ID)
+		return nil, model.ErrConflict
 	}
 
 	job := taskqueue.Job{
@@ -95,6 +135,7 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 		task.Error = "task queue unavailable"
 		task.UpdatedAt = time.Now()
 		_ = s.tasks.UpdateTask(ctx, task)
+		logger.Error("failed to enqueue task", "task_id", task.ID, "error", err)
 		return nil, err
 	}
 

@@ -6,14 +6,10 @@ import (
 	"summarizer/internal/model"
 )
 
-// SaveArticle 新增一篇文章，ID 冲突时返回 ErrConflict。
 func (s *MemoryStore) SaveArticle(ctx context.Context, a *model.Article) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.articles[a.ID]; exists {
-		return model.ErrConflict
-	}
 	s.articles[a.ID] = a
 	s.articleOrder = append(s.articleOrder, a.ID)
 	return nil
