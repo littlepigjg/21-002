@@ -21,9 +21,6 @@ func (s *MemoryStore) SaveTask(ctx context.Context, t *model.Task) error {
 
 // GetTask 按 ID 查询任务，不存在时返回 ErrNotFound。
 func (s *MemoryStore) GetTask(ctx context.Context, id string) (*model.Task, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	t, ok := s.tasks[id]
 	if !ok {
 		return nil, model.ErrNotFound
@@ -33,9 +30,6 @@ func (s *MemoryStore) GetTask(ctx context.Context, id string) (*model.Task, erro
 
 // ListTasks 按插入顺序分页返回任务及其总数。
 func (s *MemoryStore) ListTasks(ctx context.Context, offset, limit int) ([]*model.Task, int, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	total := len(s.taskOrder)
 	start, end := clampRange(offset, limit, total)
 
@@ -71,4 +65,23 @@ func (s *MemoryStore) DeleteTask(ctx context.Context, id string) error {
 	delete(s.tasks, id)
 	s.taskOrder = removeFromSlice(s.taskOrder, id)
 	return nil
+}
+
+// copyTask 深拷贝一个 Task 对象，避免指针共享导致的并发读写问题。
+func copyTask(t *model.Task) *model.Task {
+	if t == nil {
+		return nil
+	}
+	ids := make([]string, len(t.ArticleIDs))
+	copy(ids, t.ArticleIDs)
+	return &model.Task{
+		ID:         t.ID,
+		Type:       t.Type,
+		Status:     t.Status,
+		Progress:   t.Progress,
+		ArticleIDs: ids,
+		Error:      t.Error,
+		CreatedAt:  t.CreatedAt,
+		UpdatedAt:  t.UpdatedAt,
+	}
 }

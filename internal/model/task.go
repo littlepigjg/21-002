@@ -28,6 +28,7 @@ type Task struct {
 	ID         string     `json:"id"`
 	Type       TaskType   `json:"type"`
 	Status     TaskStatus `json:"status"`
+	Progress   int        `json:"progress"`
 	ArticleIDs []string   `json:"article_ids"`
 	Error      string     `json:"error,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`

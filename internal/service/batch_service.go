@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -14,12 +15,18 @@ import (
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
+	task.Progress = 0
+	time.Sleep(15 * time.Millisecond)
 	_ = s.tasks.UpdateTask(ctx, task)
 
 	var firstErr error
 	successCount := 0
+	totalArticles := len(task.ArticleIDs)
 
-	for _, id := range task.ArticleIDs {
+	progressMu := &sync.Mutex{}
+	progressMap := make(map[string]string)
+
+	for idx, id := range task.ArticleIDs {
 		if ctx.Err() != nil {
 			firstErr = ctx.Err()
 			break
@@ -30,6 +37,10 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			if firstErr == nil {
 				firstErr = err
 			}
+			progressMu.Lock()
+			progressMap[id] = "skipped"
+			progressMu.Unlock()
+			task.Progress = ((idx + 1) * 100) / totalArticles
 			continue
 		}
 
@@ -41,6 +52,10 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			if firstErr == nil {
 				firstErr = err
 			}
+			progressMu.Lock()
+			progressMap[id] = "failed"
+			progressMu.Unlock()
+			task.Progress = ((idx + 1) * 100) / totalArticles
 			continue
 		}
 
@@ -48,6 +63,10 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			if firstErr == nil {
 				firstErr = err
 			}
+			progressMu.Lock()
+			progressMap[id] = "error"
+			progressMu.Unlock()
+			task.Progress = ((idx + 1) * 100) / totalArticles
 			continue
 		}
 
@@ -55,6 +74,10 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		article.UpdatedAt = time.Now()
 		_ = s.articles.UpdateArticle(ctx, article)
 		successCount++
+		progressMu.Lock()
+		progressMap[id] = "completed"
+		progressMu.Unlock()
+		task.Progress = ((idx + 1) * 100) / totalArticles
 	}
 
 	task.UpdatedAt = time.Now()
@@ -68,11 +91,19 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 	}
 	_ = s.tasks.UpdateTask(ctx, task)
 
+	progressMu.Lock()
+	summary := make(map[string]int)
+	for _, v := range progressMap {
+		summary[v]++
+	}
+	progressMu.Unlock()
+
 	logger.Info("batch task finished",
 		"task_id", task.ID,
 		"success", successCount,
-		"total", len(task.ArticleIDs),
+		"total", totalArticles,
 		"status", string(task.Status),
+		"progress_detail", summary,
 	)
 	return firstErr
 }

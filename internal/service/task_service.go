@@ -91,10 +91,18 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 		},
 	}
 	if err := s.queue.Enqueue(ctx, job); err != nil {
-		task.Status = model.TaskFailed
-		task.Error = "task queue unavailable"
-		task.UpdatedAt = time.Now()
-		_ = s.tasks.UpdateTask(ctx, task)
+		freshTask, fetchErr := s.fetchTaskSnapshot(ctx, task.ID)
+		if fetchErr == nil && freshTask != nil {
+			freshTask.Status = model.TaskFailed
+			freshTask.Error = "task queue unavailable"
+			freshTask.UpdatedAt = time.Now()
+			_ = s.tasks.UpdateTask(ctx, freshTask)
+		} else {
+			task.Status = model.TaskFailed
+			task.Error = "task queue unavailable"
+			task.UpdatedAt = time.Now()
+			_ = s.tasks.UpdateTask(ctx, task)
+		}
 		return nil, err
 	}
 
@@ -116,4 +124,10 @@ func (s *TaskService) ListTasks(ctx context.Context, offset, limit int) ([]*mode
 // HandleJob 供 taskqueue.Manager 调用，执行队列中的 Job。
 func (s *TaskService) HandleJob(ctx context.Context, j taskqueue.Job) error {
 	return j.Run(ctx)
+}
+
+// fetchTaskSnapshot 从 TaskStore 读取最新的任务快照。
+// 用于避免直接使用可能被并发修改的指针。
+func (s *TaskService) fetchTaskSnapshot(ctx context.Context, taskID string) (*model.Task, error) {
+	return s.tasks.GetTask(ctx, taskID)
 }
