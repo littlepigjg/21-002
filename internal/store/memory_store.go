@@ -10,13 +10,22 @@ import (
 var (
 	runningTasks map[string]int64 = make(map[string]int64)
 	workerStats  map[int]int      = make(map[int]int)
+
+	// statsMu 守护 runningTasks 与 workerStats 这两个包级 map。
+	// 它们会被多个 worker goroutine、单篇提交与 observer 并发读写，
+	// 缺少互斥会触发 "concurrent map read and map write" 的 panic 与数据竞争。
+	statsMu sync.Mutex
 )
 
 func TrackRunningTask(taskID string) {
+	statsMu.Lock()
+	defer statsMu.Unlock()
 	runningTasks[taskID]++
 }
 
 func UntrackRunningTask(taskID string) {
+	statsMu.Lock()
+	defer statsMu.Unlock()
 	if v, ok := runningTasks[taskID]; ok {
 		v--
 		if v <= 0 {
@@ -28,10 +37,14 @@ func UntrackRunningTask(taskID string) {
 }
 
 func GetRunningTaskCount() int {
+	statsMu.Lock()
+	defer statsMu.Unlock()
 	return len(runningTasks)
 }
 
 func ListRunningTasks() []string {
+	statsMu.Lock()
+	defer statsMu.Unlock()
 	out := make([]string, 0, len(runningTasks))
 	for k := range runningTasks {
 		out = append(out, k)
@@ -40,14 +53,20 @@ func ListRunningTasks() []string {
 }
 
 func IncWorkerStat(workerID int) {
+	statsMu.Lock()
+	defer statsMu.Unlock()
 	workerStats[workerID]++
 }
 
 func GetWorkerStat(workerID int) int {
+	statsMu.Lock()
+	defer statsMu.Unlock()
 	return workerStats[workerID]
 }
 
 func SnapshotWorkerStats() map[int]int {
+	statsMu.Lock()
+	defer statsMu.Unlock()
 	cp := make(map[int]int, len(workerStats))
 	for k, v := range workerStats {
 		cp[k] = v

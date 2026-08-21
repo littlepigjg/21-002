@@ -14,7 +14,9 @@ func (s *MemoryStore) SaveResult(ctx context.Context, r *model.AnalysisResult) e
 	if _, exists := s.results[r.ArticleID]; !exists {
 		s.resultOrder = append(s.resultOrder, r.ArticleID)
 	}
-	s.results[r.ArticleID] = r
+	// 存入副本，解耦调用方指针与 store 内部对象（见 task_store 注释）。
+	cp := *r
+	s.results[r.ArticleID] = &cp
 	return nil
 }
 
@@ -27,7 +29,9 @@ func (s *MemoryStore) GetResult(ctx context.Context, articleID string) (*model.A
 	if !ok {
 		return nil, model.ErrNotFound
 	}
-	return r, nil
+	// 返回结构体副本，避免与并发读路径发生指针别名数据竞争。
+	cp := *r
+	return &cp, nil
 }
 
 // ListResults 按插入顺序分页返回分析结果及其总数。
@@ -41,7 +45,8 @@ func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*mo
 	out := make([]*model.AnalysisResult, 0, end-start)
 	for _, id := range s.resultOrder[start:end] {
 		if r, ok := s.results[id]; ok {
-			out = append(out, r)
+			cp := *r
+			out = append(out, &cp)
 		}
 	}
 	return out, total, nil

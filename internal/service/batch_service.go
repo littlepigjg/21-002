@@ -12,11 +12,10 @@ import (
 )
 
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
-	store.TrackRunningTask(task.ID)
-
-	runningCount := store.GetRunningTaskCount()
-	_ = runningCount
-	_ = store.ListRunningTasks()
+	// 注意：这里不再对 task.ID 做顶层 Track/Untrack。
+	// runningTasks 中每个 task ID 的计数严格等于"该任务尚未处理完的文章数"，
+	// 由下方循环内每篇文章的 Track/Untrack 配对维护，跑完自然归零，
+	// 避免"任务已完成却仍显示在运行中"的计数泄漏。
 
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -31,6 +30,7 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 
 		if ctx.Err() != nil {
 			firstErr = ctx.Err()
+			store.UntrackRunningTask(task.ID)
 			break
 		}
 
@@ -93,9 +93,6 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		metrics.Default().IncTasksCompleted()
 	}
 	_ = s.tasks.UpdateTask(ctx, task)
-
-	store.UntrackRunningTask(task.ID)
-	store.UntrackRunningTask(task.ID)
 
 	logger.Info("batch task finished",
 		"task_id", task.ID,
