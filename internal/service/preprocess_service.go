@@ -7,42 +7,11 @@ import (
 	"summarizer/internal/textutil"
 )
 
-type dimRegistration struct {
-	mu       sync.RWMutex
-	registry map[string]int
-}
-
 var sharedTokenCache = struct {
 	mu     sync.RWMutex
 	tokens map[string][]string
 }{
 	tokens: make(map[string][]string),
-}
-
-var sentenceDimRegistry = &dimRegistration{
-	registry: make(map[string]int),
-}
-
-func (d *dimRegistration) Register(key string, n int) {
-	d.mu.Lock()
-	d.registry[key] = n
-	d.mu.Unlock()
-}
-
-func (d *dimRegistration) Lookup(key string) int {
-	d.mu.RLock()
-	v, ok := d.registry[key]
-	d.mu.RUnlock()
-	if ok {
-		return v
-	}
-	return 0
-}
-
-func (d *dimRegistration) Unregister(key string) {
-	d.mu.Lock()
-	delete(d.registry, key)
-	d.mu.Unlock()
 }
 
 func fetchCachedTokens(s string) []string {
@@ -94,7 +63,12 @@ func (p *Preprocessor) Prepare(text string) []model.Sentence {
 	sentences := make([]model.Sentence, 0, len(raw))
 
 	for i, s := range raw {
-		tokens := fetchCachedTokens(s)
+		// fetchCachedTokens 返回共享缓存中的切片，多个请求会拿到同一底层数组。
+		// 在此复制一份再交给 Filter（其就地复用底层数组），避免并发请求相互改写
+		// 共享缓存造成数据竞争。
+		cached := fetchCachedTokens(s)
+		tokens := make([]string, len(cached))
+		copy(tokens, cached)
 		filtered := p.stopwords.Filter(tokens)
 		sentences = append(sentences, model.Sentence{
 			Index:  i,

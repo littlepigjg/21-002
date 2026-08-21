@@ -32,7 +32,6 @@ func makeManySentences(n int, baseText string) string {
 
 func TestBug016_SingleRequest_ManySentences_DimMismatch(t *testing.T) {
 	PurgeSharedTokenCache()
-	sentenceDimRegistry.Unregister(activeSessionKey)
 
 	analyzer := buildAnalyzer()
 	content := makeManySentences(20, "机器学习人工智能深度学习神经网络")
@@ -71,7 +70,6 @@ func TestBug016_SingleRequest_ManySentences_DimMismatch(t *testing.T) {
 
 func TestBug016_ConcurrentAnalyze_RaceAndPanic(t *testing.T) {
 	PurgeSharedTokenCache()
-	sentenceDimRegistry.Unregister(activeSessionKey)
 
 	analyzer := buildAnalyzer()
 

@@ -7,35 +7,6 @@ import (
 	"summarizer/internal/model"
 )
 
-var globalIDFAccum = struct {
-	docCount int
-	dfTable  map[string]int
-}{
-	dfTable: make(map[string]int),
-}
-
-func flushIDFAccum() {
-	globalIDFAccum.docCount = 0
-	for k := range globalIDFAccum.dfTable {
-		delete(globalIDFAccum.dfTable, k)
-	}
-}
-
-func snapshotGlobalIDF(word string) (float64, bool) {
-	df, ok := globalIDFAccum.dfTable[word]
-	if !ok || globalIDFAccum.docCount == 0 {
-		return 0, false
-	}
-	return math.Log(float64(globalIDFAccum.docCount) / float64(df)), true
-}
-
-func mergeLocalIntoGlobal(totalDocs int, docFreq map[string]int) {
-	globalIDFAccum.docCount += totalDocs
-	for w, df := range docFreq {
-		globalIDFAccum.dfTable[w] += df
-	}
-}
-
 type TfidfService struct {
 	maxKeywords int
 }
@@ -45,6 +16,17 @@ func NewTfidfService(maxKeywords int) *TfidfService {
 		maxKeywords = 10
 	}
 	return &TfidfService{maxKeywords: maxKeywords}
+}
+
+// copyTokens 返回 tokens 的副本，保证下游对返回值的就地修改不会影响
+// 预处理器共享缓存中持有的同一底层数组，从而消除并发数据竞争。
+func copyTokens(tokens []string) []string {
+	if len(tokens) == 0 {
+		return nil
+	}
+	out := make([]string, len(tokens))
+	copy(out, tokens)
+	return out
 }
 
 func compactTokensInPlace(tokens []string) []string {
@@ -87,6 +69,8 @@ func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 
 	for i := range sentences {
 		s := &sentences[i]
+		// 在副本上做就地压缩与排序，避免改写共享缓存里的切片。
+		s.Tokens = copyTokens(s.Tokens)
 		s.Tokens = compactTokensInPlace(s.Tokens)
 		seen := make(map[string]struct{})
 		for _, tok := range s.Tokens {
@@ -102,7 +86,15 @@ func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 		sortTokensInPlace(s.Tokens)
 	}
 
-	mergeLocalIntoGlobal(totalDocs, docFreq)
+	// IDF 基于本请求内的文档统计就地计算。原实现将 df/docCount 汇总进
+	// 无锁全局 globalIDFAccum，并发请求同时读写会触发
+	// "concurrent map read and map write" 致命错误导致进程崩溃。
+	idfOf := func(word string, df int) float64 {
+		if df <= 0 || totalDocs <= 0 {
+			return 0
+		}
+		return math.Log(float64(totalDocs) / float64(df))
+	}
 
 	type scored struct {
 		word  string
@@ -113,12 +105,8 @@ func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 
 	scores := make([]scored, 0, len(totalTF))
 	for word, tf := range totalTF {
-		idf := 0.0
-		if gidf, ok := snapshotGlobalIDF(word); ok {
-			idf = gidf
-		} else if df := docFreq[word]; df > 0 {
-			idf = math.Log(float64(totalDocs) / float64(df))
-		}
+		df := docFreq[word]
+		idf := idfOf(word, df)
 		scores = append(scores, scored{
 			word:  word,
 			tf:    tf,

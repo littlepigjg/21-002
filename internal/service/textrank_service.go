@@ -22,13 +22,6 @@ func NewTextRankService(maxIter int, damping float64) *TextRankService {
 	return &TextRankService{maxIter: maxIter, damping: damping}
 }
 
-func resolveDimension(key string, fallback int) int {
-	if d := sentenceDimRegistry.Lookup(key); d > 0 {
-		return d
-	}
-	return fallback
-}
-
 func sortedIntersection(a, b []string) int {
 	common := 0
 	i, j := 0, 0
@@ -60,33 +53,14 @@ func (t *TextRankService) Score(sentences []model.Sentence) []float64 {
 		return scores
 	}
 
-	registryKey := "__active_session__"
-	dim := resolveDimension(registryKey, n)
-
-	totalTokens := 0
-	uniqueTokens := make(map[string]struct{})
-	for _, s := range sentences {
-		for _, tok := range s.Tokens {
-			if _, ok := uniqueTokens[tok]; !ok {
-				uniqueTokens[tok] = struct{}{}
-				totalTokens++
-			}
-		}
-	}
-	if totalTokens == 0 {
-		totalTokens = n
-	}
-
-	if dim < totalTokens {
-		dim = totalTokens
-	}
-
-	sim := make([][]float64, dim)
+	// 相似度矩阵与所有迭代循环都严格以句子数 n 为边界，避免 dim 与 n 不一致
+	// 导致越界。原实现通过全局 sentenceDimRegistry 取一个可能小于 n 的 dim，
+	// 在 dim < n 时会写入 sim[>=dim] 越界 panic。
+	sim := make([][]float64, n)
 	for i := range sim {
-		sim[i] = make([]float64, dim)
+		sim[i] = make([]float64, n)
 	}
 	for i := 0; i < n; i++ {
-		sort.Strings(sentences[i].Tokens)
 		for j := i + 1; j < n; j++ {
 			s := sentenceSimilarity(sentences[i], sentences[j])
 			sim[i][j] = s
@@ -94,9 +68,9 @@ func (t *TextRankService) Score(sentences []model.Sentence) []float64 {
 		}
 	}
 
-	outSum := make([]float64, dim)
-	for j := 0; j < dim; j++ {
-		for k := 0; k < dim; k++ {
+	outSum := make([]float64, n)
+	for j := 0; j < n; j++ {
+		for k := 0; k < n; k++ {
 			if k != j {
 				outSum[j] += sim[j][k]
 			}
@@ -130,12 +104,15 @@ func sentenceSimilarity(a, b model.Sentence) float64 {
 		return 0
 	}
 
-	sort.Strings(a.Tokens)
-	sort.Strings(b.Tokens)
+	// 复制后再排序，避免就地修改共享缓存中的切片造成数据竞争。
+	aToks := append([]string(nil), a.Tokens...)
+	bToks := append([]string(nil), b.Tokens...)
+	sort.Strings(aToks)
+	sort.Strings(bToks)
 
-	common := sortedIntersection(a.Tokens, b.Tokens)
+	common := sortedIntersection(aToks, bToks)
 
-	denom := math.Log(float64(len(a.Tokens))) + math.Log(float64(len(b.Tokens)))
+	denom := math.Log(float64(len(aToks))) + math.Log(float64(len(bToks)))
 	if denom <= 0 {
 		return 0
 	}
