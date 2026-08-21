@@ -54,7 +54,23 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 		return nil, err
 	}
 
-	result, err := s.analyzer.Analyze(ctx, id, req.Content)
+	resp, err := s.analyzeAndSave(ctx, article)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("article submit complete",
+		"article_id", id,
+		"title", req.Title,
+		"summary_len", len(resp.Summary),
+		"keyword_count", len(resp.Keywords),
+	)
+
+	return resp, nil
+}
+
+func (s *ArticleService) analyzeAndSave(ctx context.Context, article *model.Article) (*model.AnalyzeResponse, error) {
+	result, err := s.analyzer.Analyze(ctx, article.ID, article.Content)
 	if err != nil {
 		article.Status = model.ArticleFailed
 		article.UpdatedAt = time.Now()
@@ -62,9 +78,10 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 		return nil, err
 	}
 
-	if err := s.results.SaveResult(ctx, result); err != nil {
-		return nil, err
+	if saveErr := s.results.SaveResult(ctx, result); saveErr != nil {
+		return nil, saveErr
 	}
+
 	article.Status = model.ArticleReady
 	article.UpdatedAt = time.Now()
 	_ = s.articles.UpdateArticle(ctx, article)
@@ -73,14 +90,14 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	metrics.Default().IncKeywords(len(result.Keywords))
 
 	logger.Info("article analyzed",
-		"article_id", id,
+		"article_id", article.ID,
 		"sentences", result.SentenceCount,
 		"keywords", len(result.Keywords),
 	)
 
 	return &model.AnalyzeResponse{
-		ArticleID:  id,
-		Title:      req.Title,
+		ArticleID:  article.ID,
+		Title:      article.Title,
 		Summary:    result.Summary,
 		Keywords:   result.Keywords,
 		DurationMs: result.DurationMs,

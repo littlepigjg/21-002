@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -9,8 +10,6 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -19,21 +18,25 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 	var firstErr error
 	successCount := 0
 
-	for _, id := range task.ArticleIDs {
+	articles, fetchErr := s.articles.GetArticles(ctx, task.ArticleIDs)
+	if fetchErr != nil {
+		task.Status = model.TaskFailed
+		task.Error = fetchErr.Error()
+		task.UpdatedAt = time.Now()
+		_ = s.tasks.UpdateTask(ctx, task)
+		metrics.Default().IncTasksFailed()
+		return fetchErr
+	}
+
+	for i, article := range articles {
 		if ctx.Err() != nil {
 			firstErr = ctx.Err()
 			break
 		}
 
-		article, err := s.articles.GetArticle(ctx, id)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			continue
-		}
+		articleID := task.ArticleIDs[i]
 
-		result, err := s.analyzer.Analyze(ctx, id, article.Content)
+		result, err := s.analyzer.Analyze(ctx, articleID, article.Content)
 		if err != nil {
 			article.Status = model.ArticleFailed
 			article.UpdatedAt = time.Now()
@@ -60,7 +63,7 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 	task.UpdatedAt = time.Now()
 	if firstErr != nil {
 		task.Status = model.TaskFailed
-		task.Error = firstErr.Error()
+		task.Error = fmt.Sprintf("batch partially failed: %v (processed %d/%d)", firstErr, successCount, len(articles))
 		metrics.Default().IncTasksFailed()
 	} else {
 		task.Status = model.TaskSuccess
@@ -71,7 +74,7 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 	logger.Info("batch task finished",
 		"task_id", task.ID,
 		"success", successCount,
-		"total", len(task.ArticleIDs),
+		"total", len(articles),
 		"status", string(task.Status),
 	)
 	return firstErr

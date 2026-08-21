@@ -72,3 +72,37 @@ func (s *MemoryStore) DeleteArticle(ctx context.Context, id string) error {
 	s.articleOrder = removeFromSlice(s.articleOrder, id)
 	return nil
 }
+
+// GetArticles 批量查询文章，按请求顺序返回结果。
+func (s *MemoryStore) GetArticles(ctx context.Context, ids []string) ([]*model.Article, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	results := make([]*model.Article, len(ids))
+	indexMap := make(map[string]int, len(ids))
+	for i, id := range ids {
+		indexMap[id] = i
+	}
+
+	uniqueIDs := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+
+	fetched := make(map[string]*model.Article, len(uniqueIDs))
+	for _, id := range uniqueIDs {
+		if a, ok := s.articles[id]; ok {
+			fetched[id] = a
+		}
+	}
+
+	for _, id := range ids {
+		results[indexMap[id]] = fetched[id]
+	}
+
+	return results, nil
+}
