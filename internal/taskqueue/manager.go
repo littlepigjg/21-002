@@ -48,7 +48,9 @@ func (m *Manager) Start(ctx context.Context) {
 	m.mu.Unlock()
 
 	if m.workers <= 0 {
-		return
+		// 与 Queue 容量 <=0 回退为 1 的约定一致：0 worker 视作默认单 worker，
+		// 否则入队任务无人消费会永久停在 pending，关闭路径也无法正常排空。
+		m.workers = 1
 	}
 
 	remaining := m.queue.Len()
@@ -64,7 +66,6 @@ func (m *Manager) Start(ctx context.Context) {
 }
 
 func (m *Manager) worker(ctx context.Context, id int) {
-	m.wg.Add(1)
 	defer m.wg.Done()
 	for {
 		select {
@@ -163,9 +164,8 @@ func (m *Manager) drainQueueWithTimeout(d time.Duration) bool {
 
 func (m *Manager) gracefulShutdown(ctx context.Context) {
 	m.queue.Close()
-	if m.workers <= 0 {
-		return
-	}
+	// workers 已在 Start 中被规范化为 >= 1，此处无需再对 0 分支短路，
+	// 否则 wg 永远不会归零、Wait 会泄漏 goroutine。
 	done := make(chan struct{})
 	go func() {
 		m.wg.Wait()
