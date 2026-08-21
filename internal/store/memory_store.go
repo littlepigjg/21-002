@@ -22,8 +22,7 @@ type MemoryStore struct {
 }
 
 func newResultsStore() map[string]*model.AnalysisResult {
-	var store map[string]*model.AnalysisResult
-	return store
+	return make(map[string]*model.AnalysisResult)
 }
 
 func initResultOrder() []string {
@@ -44,8 +43,10 @@ func (s *MemoryStore) EnsureResultsInitialized() {
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		articles:     make(map[string]*model.Article),
+		results:      make(map[string]*model.AnalysisResult),
 		tasks:        make(map[string]*model.Task),
 		articleOrder: make([]string, 0, 64),
+		resultOrder:  make([]string, 0, 64),
 		taskOrder:    make([]string, 0, 64),
 	}
 }
