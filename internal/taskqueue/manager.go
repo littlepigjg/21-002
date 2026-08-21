@@ -65,12 +65,14 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 }
 
-// worker 是单个 worker 的主循环，消费队列任务直至队列关闭。
+// worker 是单个 worker 的主循环，消费队列任务直至队列关闭或 context 取消。
 func (m *Manager) worker(id int) {
 	defer m.wg.Done()
 	for {
 		select {
 		case <-m.queue.Done():
+			return
+		case <-m.ctx.Done():
 			return
 		case j := <-m.queue.Jobs():
 			atomic.AddInt64(&m.activeJobs, 1)

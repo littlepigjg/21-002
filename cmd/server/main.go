@@ -92,8 +92,7 @@ func main() {
 		log.Error("graceful shutdown failed", "error", err)
 	}
 
-	// 停止 worker 池并等待其退出。
-	cancel()
-	manager.Wait()
+	// 停止 worker 池：关闭队列、取消 rootCtx、等待所有 worker 退出。
+	manager.Shutdown()
 	log.Info("server stopped")
 }
