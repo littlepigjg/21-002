@@ -2,31 +2,51 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"summarizer/internal/model"
 )
 
-// Analyzer 编排文本预处理、TF-IDF、TextRank 与摘要生成，产出最终分析结果。
+const minAnalyzeRunes = 50
+
 type Analyzer struct {
 	preprocessor *Preprocessor
 	tfidf        *TfidfService
 	textrank     *TextRankService
 	summarizer   *SummarizeService
+	minRunes     int
 }
 
-// NewAnalyzer 构造 Analyzer，组合各算法组件。
 func NewAnalyzer(preprocessor *Preprocessor, tfidf *TfidfService, textrank *TextRankService, summarizer *SummarizeService) *Analyzer {
 	return &Analyzer{
 		preprocessor: preprocessor,
 		tfidf:        tfidf,
 		textrank:     textrank,
 		summarizer:   summarizer,
+		minRunes:     minAnalyzeRunes,
 	}
 }
 
-// Analyze 对 content 执行完整分析，返回包含摘要与关键词的结果。
-// 若上下文已取消，将立即返回错误，避免继续无谓计算。
+func (a *Analyzer) SetMinRunes(n int) {
+	if n <= 0 {
+		n = minAnalyzeRunes
+	}
+	a.minRunes = n
+}
+
+func (a *Analyzer) shouldSkip(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return true
+	}
+	if utf8.RuneCountInString(trimmed) < a.minRunes {
+		return true
+	}
+	return false
+}
+
 func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*model.AnalysisResult, error) {
 	start := time.Now()
 
@@ -36,7 +56,14 @@ func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*mod
 	default:
 	}
 
+	if a.shouldSkip(content) {
+		return nil, nil
+	}
+
 	sentences := a.preprocessor.Prepare(content)
+	if len(sentences) == 0 {
+		return nil, nil
+	}
 
 	keywords := a.tfidf.Extract(sentences)
 	scores := a.textrank.Score(sentences)

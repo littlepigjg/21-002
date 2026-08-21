@@ -2,15 +2,67 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"summarizer/internal/metrics"
 	"summarizer/internal/model"
+	"summarizer/internal/store"
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
+type BatchReport struct {
+	TopKeywords     []store.KeywordAggregate
+	TotalDocs       int
+	TotalSentences  int
+	TotalSummaryLen int
+	FailedIDs       []string
+}
+
+func (s *TaskService) buildBatchReport(ctx context.Context, ids []string) *BatchReport {
+	agg, totalDocs, totalSentences := s.results.AggregateResults(ctx, ids, 20)
+	all := s.results.GetResultsByIDs(ctx, ids)
+	totalLen := 0
+	failedIDs := make([]string, 0)
+	for i, r := range all {
+		totalLen += len(r.Summary)
+		if len(r.Keywords) == 0 && r.SentenceCount == 0 {
+			failedIDs = append(failedIDs, ids[i])
+		}
+	}
+	return &BatchReport{
+		TopKeywords:     agg,
+		TotalDocs:       totalDocs,
+		TotalSentences:  totalSentences,
+		TotalSummaryLen: totalLen,
+		FailedIDs:       failedIDs,
+	}
+}
+
+func (s *TaskService) finalizeTask(task *model.Task, report *BatchReport, firstErr error, successCount int) {
+	if firstErr == nil && report != nil {
+		tags := make([]string, 0, len(report.TopKeywords))
+		for _, kw := range report.TopKeywords {
+			tags = append(tags, kw.Word)
+		}
+		if len(tags) > 5 {
+			tags = tags[:5]
+		}
+		if len(tags) > 0 {
+			task.Error = "tags:" + strings.Join(tags, ",")
+		}
+	}
+	task.UpdatedAt = time.Now()
+	if firstErr != nil {
+		task.Status = model.TaskFailed
+		task.Error = firstErr.Error()
+		metrics.Default().IncTasksFailed()
+	} else {
+		task.Status = model.TaskSuccess
+		metrics.Default().IncTasksCompleted()
+	}
+}
+
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -57,15 +109,9 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		successCount++
 	}
 
-	task.UpdatedAt = time.Now()
-	if firstErr != nil {
-		task.Status = model.TaskFailed
-		task.Error = firstErr.Error()
-		metrics.Default().IncTasksFailed()
-	} else {
-		task.Status = model.TaskSuccess
-		metrics.Default().IncTasksCompleted()
-	}
+	report := s.buildBatchReport(ctx, task.ArticleIDs)
+	s.finalizeTask(task, report, firstErr, successCount)
+
 	_ = s.tasks.UpdateTask(ctx, task)
 
 	logger.Info("batch task finished",
@@ -73,6 +119,9 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		"success", successCount,
 		"total", len(task.ArticleIDs),
 		"status", string(task.Status),
+		"report_docs", report.TotalDocs,
+		"report_sentences", report.TotalSentences,
+		"report_summary_len", report.TotalSummaryLen,
 	)
 	return firstErr
 }

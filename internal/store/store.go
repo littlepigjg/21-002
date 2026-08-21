@@ -16,11 +16,19 @@ type ArticleStore interface {
 	DeleteArticle(ctx context.Context, id string) error
 }
 
-// ResultStore 定义分析结果的持久化与查询能力。
+type KeywordAggregate struct {
+	Word      string
+	TotalTF   int
+	DocCount  int
+	AvgScore  float64
+}
+
 type ResultStore interface {
 	SaveResult(ctx context.Context, r *model.AnalysisResult) error
 	GetResult(ctx context.Context, articleID string) (*model.AnalysisResult, error)
 	ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error)
+	GetResultsByIDs(ctx context.Context, ids []string) []*model.AnalysisResult
+	AggregateResults(ctx context.Context, ids []string, topN int) ([]KeywordAggregate, int, int)
 }
 
 // TaskStore 定义异步任务的持久化与查询能力。
