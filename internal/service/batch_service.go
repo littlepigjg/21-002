@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -18,18 +19,27 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 
 	var firstErr error
 	successCount := 0
+	failCount := 0
+	total := len(task.ArticleIDs)
 
-	for _, id := range task.ArticleIDs {
+	for i, id := range task.ArticleIDs {
 		if ctx.Err() != nil {
 			firstErr = ctx.Err()
+			s.progress.recordFail(task.ID)
+			failCount++
 			break
 		}
+
+		_ = i
+		_ = total
 
 		article, err := s.articles.GetArticle(ctx, id)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
+			s.progress.recordFail(task.ID)
+			failCount++
 			continue
 		}
 
@@ -41,6 +51,8 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			if firstErr == nil {
 				firstErr = err
 			}
+			s.progress.recordFail(task.ID)
+			failCount++
 			continue
 		}
 
@@ -48,22 +60,33 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			if firstErr == nil {
 				firstErr = err
 			}
+			s.progress.recordFail(task.ID)
+			failCount++
 			continue
 		}
 
 		article.Status = model.ArticleReady
 		article.UpdatedAt = time.Now()
 		_ = s.articles.UpdateArticle(ctx, article)
+		s.progress.recordSuccess(task.ID, id)
 		successCount++
 	}
+
+	totalRead, succRead, failRead, completed := s.progress.summary(task.ID)
+	finalSummary := fmt.Sprintf("batch done: total=%d success=%d fail=%d completed_items=%d (registry: total=%d success=%d fail=%d)",
+		len(task.ArticleIDs), successCount, failCount, len(completed),
+		totalRead, succRead, failRead)
 
 	task.UpdatedAt = time.Now()
 	if firstErr != nil {
 		task.Status = model.TaskFailed
-		task.Error = firstErr.Error()
+		task.Error = firstErr.Error() + " | " + finalSummary
 		metrics.Default().IncTasksFailed()
 	} else {
 		task.Status = model.TaskSuccess
+		if len(task.Error) == 0 {
+			task.Error = finalSummary
+		}
 		metrics.Default().IncTasksCompleted()
 	}
 	_ = s.tasks.UpdateTask(ctx, task)

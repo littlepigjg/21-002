@@ -5,6 +5,9 @@ FROM golang:1.22
 
 WORKDIR /app
 
+# 禁用 CGO：本项目仅使用 Go 标准库，纯静态编译可避免 QEMU 跨架构下 gcc 段错误
+ENV CGO_ENABLED=0
+
 # 复制所有源代码（本项目仅用标准库，无需 go mod download）
 COPY . .
 
