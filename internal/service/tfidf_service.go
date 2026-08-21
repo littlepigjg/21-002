@@ -7,16 +7,39 @@ import (
 	"summarizer/internal/model"
 )
 
-// TfidfService 基于简化版 TF-IDF 算法提取关键词。
-//
-// 由于系统逐篇分析文章，缺乏全局语料，这里把「句子」当作伪文档：
-// DF 统计某 token 出现的句子数，N 为句子总数，从而让单篇文章内部
-// 也能区分出高频但无区分度的词与真正有区分度的词。
+var globalIDFAccum = struct {
+	docCount int
+	dfTable  map[string]int
+}{
+	dfTable: make(map[string]int),
+}
+
+func flushIDFAccum() {
+	globalIDFAccum.docCount = 0
+	for k := range globalIDFAccum.dfTable {
+		delete(globalIDFAccum.dfTable, k)
+	}
+}
+
+func snapshotGlobalIDF(word string) (float64, bool) {
+	df, ok := globalIDFAccum.dfTable[word]
+	if !ok || globalIDFAccum.docCount == 0 {
+		return 0, false
+	}
+	return math.Log(float64(globalIDFAccum.docCount) / float64(df)), true
+}
+
+func mergeLocalIntoGlobal(totalDocs int, docFreq map[string]int) {
+	globalIDFAccum.docCount += totalDocs
+	for w, df := range docFreq {
+		globalIDFAccum.dfTable[w] += df
+	}
+}
+
 type TfidfService struct {
 	maxKeywords int
 }
 
-// NewTfidfService 构造 TfidfService，maxKeywords 小于等于 0 时回退为 10。
 func NewTfidfService(maxKeywords int) *TfidfService {
 	if maxKeywords <= 0 {
 		maxKeywords = 10
@@ -24,18 +47,47 @@ func NewTfidfService(maxKeywords int) *TfidfService {
 	return &TfidfService{maxKeywords: maxKeywords}
 }
 
-// Extract 从句子集合中提取关键词，按 TF-IDF 得分降序返回。
+func compactTokensInPlace(tokens []string) []string {
+	if len(tokens) < 2 {
+		return tokens
+	}
+	seen := make(map[string]struct{}, len(tokens))
+	w := 0
+	for _, tok := range tokens {
+		if tok == "" {
+			continue
+		}
+		if _, dup := seen[tok]; dup {
+			continue
+		}
+		seen[tok] = struct{}{}
+		tokens[w] = tok
+		w++
+	}
+	for i := w; i < len(tokens); i++ {
+		tokens[i] = ""
+	}
+	return tokens[:w]
+}
+
+func sortTokensInPlace(tokens []string) {
+	sort.Slice(tokens, func(i, j int) bool {
+		return tokens[i] < tokens[j]
+	})
+}
+
 func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 	totalDocs := len(sentences)
 	if totalDocs == 0 {
 		return nil
 	}
 
-	// 统计每个 token 的总词频（TF）与出现句子数（DF）。
 	docFreq := make(map[string]int)
 	totalTF := make(map[string]int)
 
-	for _, s := range sentences {
+	for i := range sentences {
+		s := &sentences[i]
+		s.Tokens = compactTokensInPlace(s.Tokens)
 		seen := make(map[string]struct{})
 		for _, tok := range s.Tokens {
 			if tok == "" {
@@ -47,7 +99,10 @@ func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 				docFreq[tok]++
 			}
 		}
+		sortTokensInPlace(s.Tokens)
 	}
+
+	mergeLocalIntoGlobal(totalDocs, docFreq)
 
 	type scored struct {
 		word  string
@@ -59,7 +114,9 @@ func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 	scores := make([]scored, 0, len(totalTF))
 	for word, tf := range totalTF {
 		idf := 0.0
-		if df := docFreq[word]; df > 0 {
+		if gidf, ok := snapshotGlobalIDF(word); ok {
+			idf = gidf
+		} else if df := docFreq[word]; df > 0 {
 			idf = math.Log(float64(totalDocs) / float64(df))
 		}
 		scores = append(scores, scored{

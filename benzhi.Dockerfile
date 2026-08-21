@@ -5,6 +5,9 @@ FROM golang:1.22
 
 WORKDIR /app
 
+# 启用 CGO 以保证 -race 竞态检测可用
+ENV CGO_ENABLED=1
+
 # 复制所有源代码（本项目仅用标准库，无需 go mod download）
 COPY . .
 

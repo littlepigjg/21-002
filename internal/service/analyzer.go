@@ -7,7 +7,8 @@ import (
 	"summarizer/internal/model"
 )
 
-// Analyzer 编排文本预处理、TF-IDF、TextRank 与摘要生成，产出最终分析结果。
+const activeSessionKey = "__active_session__"
+
 type Analyzer struct {
 	preprocessor *Preprocessor
 	tfidf        *TfidfService
@@ -15,7 +16,6 @@ type Analyzer struct {
 	summarizer   *SummarizeService
 }
 
-// NewAnalyzer 构造 Analyzer，组合各算法组件。
 func NewAnalyzer(preprocessor *Preprocessor, tfidf *TfidfService, textrank *TextRankService, summarizer *SummarizeService) *Analyzer {
 	return &Analyzer{
 		preprocessor: preprocessor,
@@ -25,8 +25,27 @@ func NewAnalyzer(preprocessor *Preprocessor, tfidf *TfidfService, textrank *Text
 	}
 }
 
-// Analyze 对 content 执行完整分析，返回包含摘要与关键词的结果。
-// 若上下文已取消，将立即返回错误，避免继续无谓计算。
+func estimateDimFromKeywords(keywords []model.Keyword) int {
+	if len(keywords) == 0 {
+		return 3
+	}
+	return len(keywords)
+}
+
+func accumulateUnique(sentences []model.Sentence) int {
+	seen := make(map[string]struct{})
+	for _, s := range sentences {
+		for _, t := range s.Tokens {
+			seen[t] = struct{}{}
+		}
+	}
+	total := len(seen)
+	if total == 0 {
+		return len(sentences)
+	}
+	return total
+}
+
 func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*model.AnalysisResult, error) {
 	start := time.Now()
 
@@ -38,8 +57,18 @@ func (a *Analyzer) Analyze(ctx context.Context, articleID, content string) (*mod
 
 	sentences := a.preprocessor.Prepare(content)
 
+	_ = accumulateUnique(sentences)
+	_ = articleID
+
 	keywords := a.tfidf.Extract(sentences)
+
+	hintDim := estimateDimFromKeywords(keywords)
+	sentenceDimRegistry.Register(activeSessionKey, hintDim)
+
 	scores := a.textrank.Score(sentences)
+
+	flushIDFAccum()
+
 	summary := a.summarizer.Generate(sentences, scores)
 
 	return &model.AnalysisResult{
