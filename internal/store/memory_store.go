@@ -15,10 +15,11 @@ type MemoryStore struct {
 	results  map[string]*model.AnalysisResult
 	tasks    map[string]*model.Task
 
-	// 各集合按插入顺序保存 key，用于稳定的分页查询。
 	articleOrder []string
 	resultOrder  []string
 	taskOrder    []string
+
+	resultMeta map[string]*model.ResultMeta
 }
 
 // NewMemoryStore 构造一个空的 MemoryStore。
@@ -30,6 +31,7 @@ func NewMemoryStore() *MemoryStore {
 		articleOrder: make([]string, 0, 64),
 		resultOrder:  make([]string, 0, 64),
 		taskOrder:    make([]string, 0, 64),
+		resultMeta:   make(map[string]*model.ResultMeta),
 	}
 }
 

@@ -2,7 +2,11 @@ package model
 
 import "time"
 
-// AnalysisResult 保存一篇文章的分析结果（摘要、关键词、耗时等）。
+type ResultMeta struct {
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type AnalysisResult struct {
 	ArticleID     string    `json:"article_id"`
 	Summary       string    `json:"summary"`
@@ -10,4 +14,16 @@ type AnalysisResult struct {
 	SentenceCount int       `json:"sentence_count"`
 	DurationMs    int64     `json:"duration_ms"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (r *AnalysisResult) Clone() *AnalysisResult {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	if r.Keywords != nil {
+		out.Keywords = make([]Keyword, len(r.Keywords))
+		copy(out.Keywords, r.Keywords)
+	}
+	return &out
 }

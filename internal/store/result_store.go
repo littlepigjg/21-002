@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"summarizer/internal/model"
 )
@@ -11,10 +12,23 @@ func (s *MemoryStore) SaveResult(ctx context.Context, r *model.AnalysisResult) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	isNew := false
 	if _, exists := s.results[r.ArticleID]; !exists {
 		s.resultOrder = append(s.resultOrder, r.ArticleID)
+		isNew = true
 	}
 	s.results[r.ArticleID] = r
+
+	now := time.Now()
+	if isNew {
+		s.resultMeta[r.ArticleID] = &model.ResultMeta{
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+	} else {
+		s.resultMeta[r.ArticleID].UpdatedAt = now
+	}
+
 	return nil
 }
 
@@ -41,7 +55,11 @@ func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*mo
 	out := make([]*model.AnalysisResult, 0, end-start)
 	for _, id := range s.resultOrder[start:end] {
 		if r, ok := s.results[id]; ok {
-			out = append(out, r)
+			clone := r.Clone()
+			if meta, ok := s.resultMeta[id]; ok {
+				clone.CreatedAt = meta.CreatedAt
+			}
+			out = append(out, clone)
 		}
 	}
 	return out, total, nil
