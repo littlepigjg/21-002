@@ -72,7 +72,7 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		successCount++
 	}
 
-	totalRead, succRead, failRead, completed := s.progress.summary(task.ID)
+	totalRead, succRead, failRead, completed := s.progress.summarySnapshot(task.ID)
 	finalSummary := fmt.Sprintf("batch done: total=%d success=%d fail=%d completed_items=%d (registry: total=%d success=%d fail=%d)",
 		len(task.ArticleIDs), successCount, failCount, len(completed),
 		totalRead, succRead, failRead)
