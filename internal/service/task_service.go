@@ -14,14 +14,19 @@ import (
 
 // TaskService 处理批量任务的提交、状态查询与历史列表。
 type TaskService struct {
-	tasks    store.TaskStore
-	articles store.ArticleStore
-	results  store.ResultStore
-	analyzer *Analyzer
-	ids      *store.IDGenerator
-	queue    *taskqueue.Queue
-	maxLen   int
-	ctx      context.Context
+	tasks         store.TaskStore
+	articles      store.ArticleStore
+	results       store.ResultStore
+	analyzer      *Analyzer
+	ids           *store.IDGenerator
+	queue         *taskqueue.Queue
+	maxLen        int
+	ctx           context.Context
+	processLogDir string
+}
+
+func (s *TaskService) SetProcessLogDir(dir string) {
+	s.processLogDir = dir
 }
 
 // NewTaskService 构造 TaskService。
