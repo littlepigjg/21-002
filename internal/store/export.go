@@ -16,14 +16,6 @@ type Snapshot struct {
 // Snapshot 返回当前存储中所有数据的浅拷贝，按插入顺序排列。
 // 该操作持有读锁，返回后释放；调用方不应修改返回对象内部字段。
 func (s *MemoryStore) Snapshot(ctx context.Context) Snapshot {
-	metaSnap := make(map[string]*model.ResultMeta, len(s.resultMeta))
-	for id, meta := range s.resultMeta {
-		metaSnap[id] = &model.ResultMeta{
-			CreatedAt: meta.CreatedAt,
-			UpdatedAt: meta.UpdatedAt,
-		}
-	}
-
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -41,7 +33,7 @@ func (s *MemoryStore) Snapshot(ctx context.Context) Snapshot {
 	for _, id := range s.resultOrder {
 		if r, ok := s.results[id]; ok {
 			clone := r.Clone()
-			if meta, ok := metaSnap[id]; ok {
+			if meta, ok := s.resultMeta[id]; ok {
 				clone.CreatedAt = meta.CreatedAt
 			}
 			snap.Results = append(snap.Results, clone)
