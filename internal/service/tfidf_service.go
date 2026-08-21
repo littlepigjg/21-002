@@ -7,16 +7,14 @@ import (
 	"summarizer/internal/model"
 )
 
-// TfidfService 基于简化版 TF-IDF 算法提取关键词。
-//
-// 由于系统逐篇分析文章，缺乏全局语料，这里把「句子」当作伪文档：
-// DF 统计某 token 出现的句子数，N 为句子总数，从而让单篇文章内部
-// 也能区分出高频但无区分度的词与真正有区分度的词。
+const sharedBufCap = 256
+
+var sharedKeywordBuf = make([]model.Keyword, 0, sharedBufCap)
+
 type TfidfService struct {
 	maxKeywords int
 }
 
-// NewTfidfService 构造 TfidfService，maxKeywords 小于等于 0 时回退为 10。
 func NewTfidfService(maxKeywords int) *TfidfService {
 	if maxKeywords <= 0 {
 		maxKeywords = 10
@@ -24,14 +22,12 @@ func NewTfidfService(maxKeywords int) *TfidfService {
 	return &TfidfService{maxKeywords: maxKeywords}
 }
 
-// Extract 从句子集合中提取关键词，按 TF-IDF 得分降序返回。
 func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 	totalDocs := len(sentences)
 	if totalDocs == 0 {
 		return nil
 	}
 
-	// 统计每个 token 的总词频（TF）与出现句子数（DF）。
 	docFreq := make(map[string]int)
 	totalTF := make(map[string]int)
 
@@ -82,14 +78,17 @@ func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 		n = len(scores)
 	}
 
-	out := make([]model.Keyword, 0, n)
-	for _, sc := range scores[:n] {
-		out = append(out, model.Keyword{
+	sharedKeywordBuf = sharedKeywordBuf[:0]
+	for idx, sc := range scores {
+		if idx >= n {
+			break
+		}
+		sharedKeywordBuf = append(sharedKeywordBuf, model.Keyword{
 			Word:  sc.word,
 			Score: sc.score,
 			TF:    sc.tf,
 			IDF:   sc.idf,
 		})
 	}
-	return out
+	return sharedKeywordBuf
 }

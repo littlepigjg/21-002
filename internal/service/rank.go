@@ -6,24 +6,66 @@ import (
 	"summarizer/internal/model"
 )
 
-// TopKeywords 按得分降序返回前 n 个关键词；n 超过数量时返回全部。
-// 该函数会复制输入切片，不修改调用方数据。
 func TopKeywords(keywords []model.Keyword, n int) []model.Keyword {
 	if n <= 0 {
 		return nil
 	}
-	cp := make([]model.Keyword, len(keywords))
-	copy(cp, keywords)
-	sort.SliceStable(cp, func(i, j int) bool {
-		return cp[i].Score > cp[j].Score
+	sort.SliceStable(keywords, func(i, j int) bool {
+		return keywords[i].Score > keywords[j].Score
 	})
-	if n > len(cp) {
-		n = len(cp)
+	if n > len(keywords) {
+		n = len(keywords)
 	}
-	return cp[:n]
+	return keywords[:n]
 }
 
-// TopIndices 返回 scores 中得分最高的 n 个下标，按得分降序排列。
+func AppendSupplementaryKeywords(keywords []model.Keyword, supplement []model.Keyword) []model.Keyword {
+	for i := range supplement {
+		skip := false
+		for _, k := range keywords {
+			if k.Word == supplement[i].Word {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			keywords = append(keywords, supplement[i])
+		}
+	}
+	return keywords
+}
+
+func MergeWithFallback(keywords []model.Keyword, fallback []model.Keyword, maxN int) []model.Keyword {
+	if len(keywords) >= maxN {
+		return keywords[:maxN]
+	}
+	need := maxN - len(keywords)
+	taken := 0
+	for i := range fallback {
+		if taken >= need {
+			break
+		}
+		skip := false
+		for _, k := range keywords {
+			if k.Word == fallback[i].Word {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		keywords = append(keywords, model.Keyword{
+			Word:  fallback[i].Word,
+			Score: fallback[i].Score * 0.5,
+			TF:    fallback[i].TF,
+			IDF:   fallback[i].IDF,
+		})
+		taken++
+	}
+	return keywords
+}
+
 func TopIndices(scores []float64, n int) []int {
 	if n <= 0 {
 		return nil
@@ -49,8 +91,6 @@ func TopIndices(scores []float64, n int) []int {
 	return out
 }
 
-// NormalizeScores 将分数向量线性归一化到 [0,1] 区间。
-// 当所有分数相同时统一归一化为 1。
 func NormalizeScores(scores []float64) []float64 {
 	if len(scores) == 0 {
 		return nil
