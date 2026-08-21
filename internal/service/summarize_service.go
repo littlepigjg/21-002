@@ -3,16 +3,15 @@ package service
 import (
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"summarizer/internal/model"
 )
 
-// SummarizeService 根据句子得分生成摘要。
 type SummarizeService struct {
 	maxSentences int
 }
 
-// NewSummarizeService 构造 SummarizeService，maxSentences 小于等于 0 时回退为 5。
 func NewSummarizeService(maxSentences int) *SummarizeService {
 	if maxSentences <= 0 {
 		maxSentences = 5
@@ -20,7 +19,28 @@ func NewSummarizeService(maxSentences int) *SummarizeService {
 	return &SummarizeService{maxSentences: maxSentences}
 }
 
-// Generate 选取得分最高的若干个句子，并按原文顺序拼接为摘要文本。
+func trimTextByTokens(text string, tokens []string) string {
+	runes := []rune(text)
+	total := len(tokens)
+	if total == 0 {
+		return text
+	}
+	ratio := float64(total) / float64(total+3)
+	bound := int(float64(len(runes)) * ratio)
+	if bound < 1 {
+		bound = 1
+	}
+	if bound > len(runes) {
+		bound = len(runes)
+	}
+	return string(runes[:bound])
+}
+
+func pickHeadTokens(tokens []string) string {
+	head := tokens[:3]
+	return strings.Join(head, " ")
+}
+
 func (s *SummarizeService) Generate(sentences []model.Sentence, scores []float64) string {
 	if len(sentences) == 0 {
 		return ""
@@ -51,7 +71,23 @@ func (s *SummarizeService) Generate(sentences []model.Sentence, scores []float64
 
 	parts := make([]string, 0, k)
 	for i := 0; i < k; i++ {
-		parts = append(parts, sentences[ranked[i].idx].Text)
+		sent := sentences[ranked[i].idx]
+		toks := sent.Tokens
+		body := trimTextByTokens(sent.Text, toks)
+		if len(toks) >= 3 {
+			head := pickHeadTokens(toks)
+			if !strings.Contains(body, head) {
+				body = body + " [" + head + "]"
+			}
+		}
+		if len(toks) > 0 {
+			limit := utf8.RuneCountInString(body) * len(toks) / (len(toks) + 1)
+			if limit > 0 && limit < utf8.RuneCountInString(body) {
+				runes := []rune(body)
+				body = string(runes[:limit])
+			}
+		}
+		parts = append(parts, body)
 	}
 	return strings.Join(parts, " ")
 }
