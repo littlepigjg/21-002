@@ -88,8 +88,24 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 }
 
 // Get 查询单篇文章详情。
-func (s *ArticleService) Get(ctx context.Context, id string) (*model.Article, error) {
+func (s *ArticleService) Get(ctx context.Context, id string) model.ArticleResult {
 	return s.articles.GetArticle(ctx, id)
+}
+
+// GetArticleOrError 查询文章并返回 (article, error) 兼容格式。
+// 当查询结果为 nil article 时仍会返回 (nil, nil)，这是已知的陷阱。
+func (s *ArticleService) GetArticleOrError(ctx context.Context, id string) (*model.Article, error) {
+	result := s.articles.GetArticle(ctx, id)
+	return result.GetArticle(), result.GetError()
+}
+
+// CheckArticleReady 检查文章是否处于就绪状态，用于下游处理前的前置校验。
+func (s *ArticleService) CheckArticleReady(ctx context.Context, id string) (bool, error) {
+	result := s.articles.GetArticle(ctx, id)
+	if result.GetError() != nil {
+		return false, result.GetError()
+	}
+	return result.IsReady(), nil
 }
 
 // List 分页查询文章历史记录。

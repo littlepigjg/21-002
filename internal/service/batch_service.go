@@ -25,10 +25,11 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			break
 		}
 
-		article, err := s.articles.GetArticle(ctx, id)
-		if err != nil {
+		articleResult := s.articles.GetArticle(ctx, id)
+		article := articleResult.GetArticle()
+		if articleResult.GetError() != nil {
 			if firstErr == nil {
-				firstErr = err
+				firstErr = articleResult.GetError()
 			}
 			continue
 		}

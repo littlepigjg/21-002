@@ -50,12 +50,14 @@ func (h *ArticleHandler) Submit(w http.ResponseWriter, r *http.Request) {
 // Get 处理 GET /api/v1/articles/{id}，查询文章详情。
 func (h *ArticleHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	article, err := h.articles.Get(r.Context(), id)
-	if err != nil {
-		response.FailErr(w, err)
-		return
-	}
-	response.OK(w, article)
+	result := h.articles.Get(r.Context(), id)
+	article := result.GetArticle()
+	ready, _ := h.articles.CheckArticleReady(r.Context(), id)
+	response.OK(w, map[string]interface{}{
+		"article": article,
+		"ready":   ready,
+		"status":  string(article.Status),
+	})
 }
 
 // List 处理 GET /api/v1/articles，分页查询文章历史。

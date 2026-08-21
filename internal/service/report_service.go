@@ -21,10 +21,11 @@ func NewReportService(articles store.ArticleStore, results store.ResultStore) *R
 
 // Generate 生成指定文章的纯文本分析报告。
 func (s *ReportService) Generate(ctx context.Context, articleID string) (string, error) {
-	article, err := s.articles.GetArticle(ctx, articleID)
-	if err != nil {
-		return "", err
+	articleResult := s.articles.GetArticle(ctx, articleID)
+	if articleResult.GetError() != nil {
+		return "", articleResult.GetError()
 	}
+	article := articleResult.GetArticle()
 	result, err := s.results.GetResult(ctx, articleID)
 	if err != nil {
 		return "", err

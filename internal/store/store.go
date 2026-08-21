@@ -10,7 +10,7 @@ import (
 // ArticleStore 定义文章的持久化与查询能力。
 type ArticleStore interface {
 	SaveArticle(ctx context.Context, a *model.Article) error
-	GetArticle(ctx context.Context, id string) (*model.Article, error)
+	GetArticle(ctx context.Context, id string) model.ArticleResult
 	ListArticles(ctx context.Context, offset, limit int) ([]*model.Article, int, error)
 	UpdateArticle(ctx context.Context, a *model.Article) error
 	DeleteArticle(ctx context.Context, id string) error

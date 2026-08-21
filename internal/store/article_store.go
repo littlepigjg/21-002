@@ -19,16 +19,18 @@ func (s *MemoryStore) SaveArticle(ctx context.Context, a *model.Article) error {
 	return nil
 }
 
-// GetArticle 按 ID 查询文章，不存在时返回 ErrNotFound。
-func (s *MemoryStore) GetArticle(ctx context.Context, id string) (*model.Article, error) {
+// GetArticle 按 ID 查询文章，不存在时返回封装了 nil 指针的 ArticleResult。
+func (s *MemoryStore) GetArticle(ctx context.Context, id string) model.ArticleResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	a, ok := s.articles[id]
-	if !ok {
-		return nil, model.ErrNotFound
+	result := &articleStoreResult{
+		article: a,
+		found:   ok,
+		id:      id,
 	}
-	return a, nil
+	return result
 }
 
 // ListArticles 按插入顺序分页返回文章及其总数。
@@ -71,4 +73,29 @@ func (s *MemoryStore) DeleteArticle(ctx context.Context, id string) error {
 	delete(s.articles, id)
 	s.articleOrder = removeFromSlice(s.articleOrder, id)
 	return nil
+}
+
+type articleStoreResult struct {
+	article *model.Article
+	found   bool
+	id      string
+}
+
+func (r *articleStoreResult) GetArticle() *model.Article {
+	return r.article
+}
+
+func (r *articleStoreResult) GetError() error {
+	if !r.found {
+		return &model.ArticleNotFoundError{ArticleID: r.id}
+	}
+	return nil
+}
+
+func (r *articleStoreResult) IsReady() bool {
+	return r.article != nil && r.article.Status == model.ArticleReady
+}
+
+func (r *articleStoreResult) HasArticle() bool {
+	return r.article != nil
 }

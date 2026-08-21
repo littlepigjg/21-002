@@ -22,3 +22,37 @@ type Article struct {
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
 }
+
+// ArticleResult 是存储层对单篇文章查询结果的封装接口，
+// 将数据与错误信息统一为一个可返回的值。
+type ArticleResult interface {
+	GetArticle() *Article
+	GetError() error
+	IsReady() bool
+	HasArticle() bool
+}
+
+type articleQueryResult struct {
+	article *Article
+	err     error
+}
+
+func NewArticleResult(a *Article, err error) ArticleResult {
+	return &articleQueryResult{article: a, err: err}
+}
+
+func (r *articleQueryResult) GetArticle() *Article {
+	return r.article
+}
+
+func (r *articleQueryResult) GetError() error {
+	return r.err
+}
+
+func (r *articleQueryResult) IsReady() bool {
+	return r.article != nil && r.article.Status == ArticleReady
+}
+
+func (r *articleQueryResult) HasArticle() bool {
+	return r.article != nil
+}
