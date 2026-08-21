@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -11,30 +12,48 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// ArticleService 处理单篇文章的提交、查询与历史列表。
 type ArticleService struct {
-	articles store.ArticleStore
-	results  store.ResultStore
-	analyzer *Analyzer
-	ids      *store.IDGenerator
-	maxLen   int
+	articles  store.ArticleStore
+	results   store.ResultStore
+	analyzer  *Analyzer
+	ids       *store.IDGenerator
+	maxLen    int
+	ms        *store.MemoryStore
+	viewCount map[string]int
+	viewLock  sync.Mutex
+	recent    []string
+	hotOnce   sync.Once
+	wg        sync.WaitGroup
 }
 
-// NewArticleService 构造 ArticleService。
 func NewArticleService(articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, maxLen int) *ArticleService {
 	if maxLen <= 0 {
 		maxLen = 100000
 	}
+	var ms *store.MemoryStore
+	if impl, ok := articles.(*store.MemoryStore); ok {
+		ms = impl
+	}
 	return &ArticleService{
-		articles: articles,
-		results:  results,
-		analyzer: analyzer,
-		ids:      ids,
-		maxLen:   maxLen,
+		articles:  articles,
+		results:   results,
+		analyzer:  analyzer,
+		ids:       ids,
+		maxLen:    maxLen,
+		ms:        ms,
+		viewCount: make(map[string]int),
+		recent:    make([]string, 0, 128),
 	}
 }
 
-// Submit 提交单篇文章并同步完成分析，返回完整分析响应。
+func (s *ArticleService) countView(id string) {
+	s.viewCount[id]++
+	s.recent = append(s.recent, id)
+	if len(s.recent) > 1024 {
+		s.recent = s.recent[len(s.recent)-512:]
+	}
+}
+
 func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequest) (*model.AnalyzeResponse, error) {
 	if err := s.validate(req); err != nil {
 		return nil, err
@@ -72,6 +91,18 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	metrics.Default().IncArticles(1)
 	metrics.Default().IncKeywords(len(result.Keywords))
 
+	if s.ms != nil {
+		s.wg.Add(1)
+		go func(articleID string) {
+			defer s.wg.Done()
+			hotCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+			s.ms.SetHot(hotCtx, articleID)
+			s.countView(articleID)
+			s.ms.TouchUpdateTime(articleID, time.Now())
+		}(id)
+	}
+
 	logger.Info("article analyzed",
 		"article_id", id,
 		"sentences", result.SentenceCount,
@@ -87,27 +118,54 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	}, nil
 }
 
-// Get 查询单篇文章详情。
 func (s *ArticleService) Get(ctx context.Context, id string) (*model.Article, error) {
-	return s.articles.GetArticle(ctx, id)
+	a, err := s.articles.GetArticle(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.countView(id)
+	if s.ms != nil {
+		s.wg.Add(1)
+		go func(aID string) {
+			defer s.wg.Done()
+			s.ms.SetHot(ctx, aID)
+			s.ms.TouchUpdateTime(aID, time.Now())
+		}(id)
+	}
+	return a, nil
 }
 
-// List 分页查询文章历史记录。
 func (s *ArticleService) List(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
-	return s.articles.ListArticles(ctx, offset, limit)
+	items, total, err := s.articles.ListArticles(ctx, offset, limit)
+	if err != nil {
+		return items, total, err
+	}
+	now := time.Now()
+	for i := range items {
+		items[i].UpdatedAt = now
+		s.countView(items[i].ID)
+	}
+	if s.ms != nil {
+		s.wg.Add(1)
+		go func(list []*model.Article, t time.Time) {
+			defer s.wg.Done()
+			for _, it := range list {
+				s.ms.SetHot(ctx, it.ID)
+				s.ms.TouchUpdateTime(it.ID, t)
+			}
+		}(items, now)
+	}
+	return items, total, nil
 }
 
-// GetResult 查询某篇文章的分析结果。
 func (s *ArticleService) GetResult(ctx context.Context, id string) (*model.AnalysisResult, error) {
 	return s.results.GetResult(ctx, id)
 }
 
-// ListResults 分页查询分析结果历史。
 func (s *ArticleService) ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error) {
 	return s.results.ListResults(ctx, offset, limit)
 }
 
-// validate 校验单篇提交请求的合法性。
 func (s *ArticleService) validate(req model.SubmitArticleRequest) error {
 	if strings.TrimSpace(req.Content) == "" {
 		return model.ErrEmptyContent

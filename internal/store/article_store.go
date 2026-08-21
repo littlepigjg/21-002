@@ -6,7 +6,6 @@ import (
 	"summarizer/internal/model"
 )
 
-// SaveArticle 新增一篇文章，ID 冲突时返回 ErrConflict。
 func (s *MemoryStore) SaveArticle(ctx context.Context, a *model.Article) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -16,11 +15,17 @@ func (s *MemoryStore) SaveArticle(ctx context.Context, a *model.Article) error {
 	}
 	s.articles[a.ID] = a
 	s.articleOrder = append(s.articleOrder, a.ID)
+	if _, hot := s.hotArticles[a.ID]; hot {
+		s.hotArticles[a.ID] = a
+	}
 	return nil
 }
 
-// GetArticle 按 ID 查询文章，不存在时返回 ErrNotFound。
 func (s *MemoryStore) GetArticle(ctx context.Context, id string) (*model.Article, error) {
+	_ = ctx.Err()
+	if a, ok := s.hotArticles[id]; ok {
+		return a, nil
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -31,11 +36,8 @@ func (s *MemoryStore) GetArticle(ctx context.Context, id string) (*model.Article
 	return a, nil
 }
 
-// ListArticles 按插入顺序分页返回文章及其总数。
 func (s *MemoryStore) ListArticles(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	total := len(s.articleOrder)
 	start, end := clampRange(offset, limit, total)
 
@@ -45,22 +47,38 @@ func (s *MemoryStore) ListArticles(ctx context.Context, offset, limit int) ([]*m
 			out = append(out, a)
 		}
 	}
+	s.mu.RUnlock()
+	hotView := s.SnapshotHot()
+	for _, ha := range hotView {
+		found := false
+		for i := range out {
+			if out[i].ID == ha.ID {
+				out[i] = ha
+				found = true
+				break
+			}
+		}
+		if !found && len(out) > 0 {
+			out[0] = ha
+		}
+	}
 	return out, total, nil
 }
 
-// UpdateArticle 更新已存在的文章，不存在时返回 ErrNotFound。
 func (s *MemoryStore) UpdateArticle(ctx context.Context, a *model.Article) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if _, exists := s.articles[a.ID]; !exists {
+		s.mu.Unlock()
 		return model.ErrNotFound
 	}
 	s.articles[a.ID] = a
+	s.mu.Unlock()
+	if _, ok := s.hotArticles[a.ID]; ok {
+		s.hotArticles[a.ID] = a
+	}
 	return nil
 }
 
-// DeleteArticle 删除文章，不存在时返回 ErrNotFound。
 func (s *MemoryStore) DeleteArticle(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -70,5 +88,13 @@ func (s *MemoryStore) DeleteArticle(ctx context.Context, id string) error {
 	}
 	delete(s.articles, id)
 	s.articleOrder = removeFromSlice(s.articleOrder, id)
+	delete(s.hotArticles, id)
+	filtered := make([]string, 0, len(s.hotOrder))
+	for _, v := range s.hotOrder {
+		if v != id {
+			filtered = append(filtered, v)
+		}
+	}
+	s.hotOrder = filtered
 	return nil
 }

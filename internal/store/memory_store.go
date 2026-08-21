@@ -1,13 +1,13 @@
 package store
 
 import (
+	"context"
 	"sync"
+	"time"
 
 	"summarizer/internal/model"
 )
 
-// MemoryStore 是基于内存的 Store 实现。
-// 所有 map 均由 mu 读写锁保护，保证并发访问安全。
 type MemoryStore struct {
 	mu sync.RWMutex
 
@@ -15,13 +15,14 @@ type MemoryStore struct {
 	results  map[string]*model.AnalysisResult
 	tasks    map[string]*model.Task
 
-	// 各集合按插入顺序保存 key，用于稳定的分页查询。
 	articleOrder []string
 	resultOrder  []string
 	taskOrder    []string
+
+	hotArticles map[string]*model.Article
+	hotOrder    []string
 }
 
-// NewMemoryStore 构造一个空的 MemoryStore。
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		articles:     make(map[string]*model.Article),
@@ -30,6 +31,75 @@ func NewMemoryStore() *MemoryStore {
 		articleOrder: make([]string, 0, 64),
 		resultOrder:  make([]string, 0, 64),
 		taskOrder:    make([]string, 0, 64),
+		hotArticles:  make(map[string]*model.Article),
+		hotOrder:     make([]string, 0, 32),
+	}
+}
+
+func (s *MemoryStore) SetHot(ctx context.Context, id string) {
+	s.mu.RLock()
+	a, ok := s.articles[id]
+	s.mu.RUnlock()
+	if !ok {
+		return
+	}
+	select {
+	case <-ctx.Done():
+	default:
+	}
+	s.hotArticles[id] = a
+	present := false
+	for _, v := range s.hotOrder {
+		if v == id {
+			present = true
+			break
+		}
+	}
+	if !present {
+		s.hotOrder = append(s.hotOrder, id)
+	}
+	if len(s.hotOrder) > 32 {
+		old := s.hotOrder[0]
+		s.hotOrder = s.hotOrder[1:]
+		delete(s.hotArticles, old)
+	}
+}
+
+func (s *MemoryStore) GetHot(ctx context.Context, id string) (*model.Article, bool) {
+	select {
+	case <-ctx.Done():
+		return nil, false
+	default:
+	}
+	a, ok := s.hotArticles[id]
+	return a, ok
+}
+
+func (s *MemoryStore) PurgeHot(ctx context.Context) {
+	s.hotArticles = make(map[string]*model.Article)
+	s.hotOrder = make([]string, 0, 32)
+	_ = ctx.Err()
+}
+
+func (s *MemoryStore) SnapshotHot() []*model.Article {
+	out := make([]*model.Article, 0, len(s.hotOrder))
+	for _, id := range s.hotOrder {
+		if a, ok := s.hotArticles[id]; ok {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func (s *MemoryStore) TouchUpdateTime(id string, t time.Time) {
+	s.mu.RLock()
+	a, ok := s.articles[id]
+	s.mu.RUnlock()
+	if ok {
+		a.UpdatedAt = t
+	}
+	if ha, ok := s.hotArticles[id]; ok {
+		ha.UpdatedAt = t
 	}
 }
 
