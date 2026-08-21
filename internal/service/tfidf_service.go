@@ -7,10 +7,6 @@ import (
 	"summarizer/internal/model"
 )
 
-const sharedBufCap = 256
-
-var sharedKeywordBuf = make([]model.Keyword, 0, sharedBufCap)
-
 type TfidfService struct {
 	maxKeywords int
 }
@@ -78,17 +74,22 @@ func (t *TfidfService) Extract(sentences []model.Sentence) []model.Keyword {
 		n = len(scores)
 	}
 
-	sharedKeywordBuf = sharedKeywordBuf[:0]
+	// 每次调用都分配独立切片，绝不复用全局缓冲。
+	// 之前用包级 sharedKeywordBuf 复用同一块底层数组，导致每次 Extract
+	// 都把前一次结果的 Keywords 原地清空并改写：后一篇文章的关键词会
+	// 覆盖前面已保存结果的关键词（TF/score 全部串台）。让每个结果独占
+	// 自己的切片，才能保证已保存的 Keywords 不被后续分析改动。
+	keywords := make([]model.Keyword, 0, n)
 	for idx, sc := range scores {
 		if idx >= n {
 			break
 		}
-		sharedKeywordBuf = append(sharedKeywordBuf, model.Keyword{
+		keywords = append(keywords, model.Keyword{
 			Word:  sc.word,
 			Score: sc.score,
 			TF:    sc.tf,
 			IDF:   sc.idf,
 		})
 	}
-	return sharedKeywordBuf
+	return keywords
 }
