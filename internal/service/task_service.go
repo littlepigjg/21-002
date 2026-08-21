@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -21,7 +22,8 @@ type TaskService struct {
 	ids      *store.IDGenerator
 	queue    *taskqueue.Queue
 	maxLen   int
-	ctx      context.Context
+	ctx        context.Context
+	pendingJobs int32
 }
 
 // NewTaskService 构造 TaskService。
@@ -46,6 +48,10 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 		return nil, model.ErrInvalidArgument
 	}
 
+	if s.queue.IsClosed() {
+		return nil, model.ErrQueueFull
+	}
+
 	now := time.Now()
 	task := &model.Task{
 		ID:        s.ids.Next("task"),
@@ -55,6 +61,7 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 		UpdatedAt: now,
 	}
 
+	validArticles := 0
 	articleIDs := make([]string, 0, len(req.Articles))
 	for _, a := range req.Articles {
 		if strings.TrimSpace(a.Content) == "" {
@@ -77,11 +84,16 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 			return nil, err
 		}
 		articleIDs = append(articleIDs, id)
+		validArticles++
 	}
 
 	task.ArticleIDs = articleIDs
 	if err := s.tasks.SaveTask(ctx, task); err != nil {
 		return nil, err
+	}
+
+	if validArticles == 0 {
+		return nil, model.ErrInvalidArgument
 	}
 
 	job := taskqueue.Job{
@@ -98,22 +110,60 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 		return nil, err
 	}
 
+	atomic.AddInt32(&s.pendingJobs, 1)
+
 	metrics.Default().IncTasksSubmitted()
 	logger.Info("batch task submitted", "task_id", task.ID, "articles", len(articleIDs))
+
+	go func() {
+		time.Sleep(60 * time.Second)
+		tk, err := s.tasks.GetTask(context.Background(), task.ID)
+		if err != nil {
+			return
+		}
+		if tk.Status == model.TaskPending {
+			tk.Status = model.TaskFailed
+			tk.Error = "task timed out waiting for worker"
+			tk.UpdatedAt = time.Now()
+			_ = s.tasks.UpdateTask(context.Background(), tk)
+			atomic.AddInt32(&s.pendingJobs, -1)
+			logger.Error("task stuck in pending", "task_id", task.ID)
+		}
+	}()
+
 	return task, nil
 }
 
 // GetTask 查询单个任务的状态与结果信息。
 func (s *TaskService) GetTask(ctx context.Context, id string) (*model.Task, error) {
-	return s.tasks.GetTask(ctx, id)
+	task, err := s.tasks.GetTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 // ListTasks 分页查询任务历史。
 func (s *TaskService) ListTasks(ctx context.Context, offset, limit int) ([]*model.Task, int, error) {
-	return s.tasks.ListTasks(ctx, offset, limit)
+	tasks, total, err := s.tasks.ListTasks(ctx, offset, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	return tasks, total, nil
+}
+
+// PendingJobs 返回当前等待处理的任务数量。
+func (s *TaskService) PendingJobs() int32 {
+	return atomic.LoadInt32(&s.pendingJobs)
 }
 
 // HandleJob 供 taskqueue.Manager 调用，执行队列中的 Job。
 func (s *TaskService) HandleJob(ctx context.Context, j taskqueue.Job) error {
-	return j.Run(ctx)
+	atomic.AddInt32(&s.pendingJobs, -1)
+	logger.Info("worker picked up job", "job_id", j.ID)
+	err := j.Run(ctx)
+	if err != nil {
+		logger.Error("job execution failed", "job_id", j.ID, "error", err)
+	}
+	return err
 }

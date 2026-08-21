@@ -13,16 +13,18 @@ type Config struct {
 	Port int
 
 	// 文本处理相关参数。
-	MaxKeywordCount    int // 每次分析提取的关键词上限
-	MaxSummarySentences int // 每次分析生成的摘要句子数上限
-	MaxArticleLength   int // 单篇文章允许的最大字符数
-	MinSentenceLength  int // 参与打分的最短句子长度（按 token 计）
-	TextRankMaxIter    int // TextRank 迭代次数上限
-	TextRankDamping    float64 // TextRank 阻尼系数
+	MaxKeywordCount     int     // 每次分析提取的关键词上限
+	MaxSummarySentences int     // 每次分析生成的摘要句子数上限
+	MaxArticleLength    int     // 单篇文章允许的最大字符数
+	MinSentenceLength   int     // 参与打分的最短句子长度（按 token 计）
+	TextRankMaxIter     int     // TextRank 迭代次数上限
+	TextRankDamping     float64 // TextRank 阻尼系数
 
 	// 任务队列相关参数。
-	WorkerCount   int // 并发 worker 数量
-	QueueCapacity int // 内存任务队列容量
+	WorkerCount     int // 并发 worker 数量
+	QueueCapacity   int // 内存任务队列容量
+	JobTimeout      time.Duration // 单个 Job 执行超时，0 表示不限
+	DrainTimeout    time.Duration // 优雅关闭时等待队列排空的超时
 
 	// HTTP 服务器超时控制。
 	ReadTimeout     time.Duration
@@ -48,6 +50,8 @@ func Default() *Config {
 		TextRankDamping:     0.85,
 		WorkerCount:         4,
 		QueueCapacity:       256,
+		JobTimeout:          0,
+		DrainTimeout:        30 * time.Second,
 		ReadTimeout:         10 * time.Second,
 		WriteTimeout:        30 * time.Second,
 		IdleTimeout:         60 * time.Second,
@@ -67,9 +71,6 @@ func (c *Config) Validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("config: invalid port %d", c.Port)
 	}
-	if c.WorkerCount <= 0 {
-		return fmt.Errorf("config: worker count must be positive")
-	}
 	if c.QueueCapacity <= 0 {
 		return fmt.Errorf("config: queue capacity must be positive")
 	}
@@ -78,6 +79,12 @@ func (c *Config) Validate() error {
 	}
 	if c.TextRankDamping <= 0 || c.TextRankDamping >= 1 {
 		return fmt.Errorf("config: textrank damping must be in (0,1)")
+	}
+	if c.ShutdownTimeout <= 0 {
+		return fmt.Errorf("config: shutdown timeout must be positive")
+	}
+	if c.DrainTimeout < 0 {
+		return fmt.Errorf("config: drain timeout must not be negative")
 	}
 	return nil
 }

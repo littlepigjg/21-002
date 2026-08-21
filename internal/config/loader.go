@@ -25,10 +25,15 @@ func Load() *Config {
 	cfg.WorkerCount = envInt("SERVER_WORKER_COUNT", cfg.WorkerCount)
 	cfg.QueueCapacity = envInt("SERVER_QUEUE_CAPACITY", cfg.QueueCapacity)
 
+	cfg.WorkerCount = ClampWorkerCount(cfg.WorkerCount)
+	cfg.QueueCapacity = ClampQueueCapacity(cfg.QueueCapacity)
+
 	cfg.ReadTimeout = envDuration("SERVER_READ_TIMEOUT", cfg.ReadTimeout)
 	cfg.WriteTimeout = envDuration("SERVER_WRITE_TIMEOUT", cfg.WriteTimeout)
 	cfg.IdleTimeout = envDuration("SERVER_IDLE_TIMEOUT", cfg.IdleTimeout)
 	cfg.ShutdownTimeout = envDuration("SERVER_SHUTDOWN_TIMEOUT", cfg.ShutdownTimeout)
+	cfg.JobTimeout = envDuration("SERVER_JOB_TIMEOUT", cfg.JobTimeout)
+	cfg.DrainTimeout = envDuration("SERVER_DRAIN_TIMEOUT", cfg.DrainTimeout)
 
 	cfg.LogLevel = envString("SERVER_LOG_LEVEL", cfg.LogLevel)
 	cfg.LogFormat = envString("SERVER_LOG_FORMAT", cfg.LogFormat)

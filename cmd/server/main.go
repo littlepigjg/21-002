@@ -1,4 +1,3 @@
-// Command server 是文章自动摘要与关键词提取系统的 HTTP 服务入口。
 package main
 
 import (
@@ -27,9 +26,8 @@ func main() {
 
 	logger.SetDefault(logger.New(logger.ParseLevel(cfg.LogLevel), cfg.LogFormat))
 	log := logger.Default()
-	log.Info("starting server", "addr", cfg.Addr())
+	log.Info("starting server", "addr", cfg.Addr(), "workers", cfg.WorkerCount, "queue_capacity", cfg.QueueCapacity)
 
-	// 构造核心依赖。
 	ids := store.NewIDGenerator()
 	memStore := store.NewMemoryStore()
 
@@ -44,10 +42,10 @@ func main() {
 	articleSvc := service.NewArticleService(memStore, memStore, analyzer, ids, cfg.MaxArticleLength)
 	taskSvc := service.NewTaskService(memStore, memStore, memStore, analyzer, ids, queue, cfg.MaxArticleLength)
 
-	// 启动异步 worker 池。
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	manager := taskqueue.NewManager(queue, cfg.WorkerCount, taskSvc.HandleJob)
+	manager.SetDrainTimeout(cfg.DrainTimeout)
 	manager.Start(rootCtx)
 
 	health := handler.NewHealthHandler(memStore)
@@ -61,7 +59,6 @@ func main() {
 		IdleTimeout:  cfg.IdleTimeout,
 	}
 
-	// 启动 HTTP 服务。
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("http server listening", "addr", cfg.Addr())
@@ -72,7 +69,6 @@ func main() {
 
 	health.SetReady(true)
 
-	// 等待退出信号或服务错误。
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -85,15 +81,13 @@ func main() {
 
 	health.SetReady(false)
 
-	// 优雅关闭 HTTP 服务。
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("graceful shutdown failed", "error", err)
 	}
 
-	// 停止 worker 池并等待其退出。
+	manager.WaitWithTimeout(cfg.ShutdownTimeout)
 	cancel()
-	manager.Wait()
 	log.Info("server stopped")
 }
