@@ -11,30 +11,34 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// ArticleService 处理单篇文章的提交、查询与历史列表。
 type ArticleService struct {
-	articles store.ArticleStore
-	results  store.ResultStore
-	analyzer *Analyzer
-	ids      *store.IDGenerator
-	maxLen   int
+	articles     store.ArticleStore
+	results      store.ResultStore
+	analyzer     *Analyzer
+	ids          *store.IDGenerator
+	maxLen       int
+	corpus       *CorpusCache
+	preprocessor *Preprocessor
 }
 
-// NewArticleService 构造 ArticleService。
-func NewArticleService(articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, maxLen int) *ArticleService {
+func NewArticleService(articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, maxLen int, corpus *CorpusCache, preprocessor *Preprocessor) *ArticleService {
 	if maxLen <= 0 {
 		maxLen = 100000
 	}
+	if corpus == nil {
+		corpus = NewCorpusCache()
+	}
 	return &ArticleService{
-		articles: articles,
-		results:  results,
-		analyzer: analyzer,
-		ids:      ids,
-		maxLen:   maxLen,
+		articles:     articles,
+		results:      results,
+		analyzer:     analyzer,
+		ids:          ids,
+		maxLen:       maxLen,
+		corpus:       corpus,
+		preprocessor: preprocessor,
 	}
 }
 
-// Submit 提交单篇文章并同步完成分析，返回完整分析响应。
 func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequest) (*model.AnalyzeResponse, error) {
 	if err := s.validate(req); err != nil {
 		return nil, err
@@ -69,6 +73,14 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	article.UpdatedAt = time.Now()
 	_ = s.articles.UpdateArticle(ctx, article)
 
+	if s.preprocessor != nil {
+		allTokens := make([]string, 0)
+		for _, s := range s.preprocessor.Prepare(req.Content) {
+			allTokens = append(allTokens, s.Tokens...)
+		}
+		s.corpus.Observe(allTokens)
+	}
+
 	metrics.Default().IncArticles(1)
 	metrics.Default().IncKeywords(len(result.Keywords))
 
@@ -87,27 +99,22 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	}, nil
 }
 
-// Get 查询单篇文章详情。
 func (s *ArticleService) Get(ctx context.Context, id string) (*model.Article, error) {
 	return s.articles.GetArticle(ctx, id)
 }
 
-// List 分页查询文章历史记录。
 func (s *ArticleService) List(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
 	return s.articles.ListArticles(ctx, offset, limit)
 }
 
-// GetResult 查询某篇文章的分析结果。
 func (s *ArticleService) GetResult(ctx context.Context, id string) (*model.AnalysisResult, error) {
 	return s.results.GetResult(ctx, id)
 }
 
-// ListResults 分页查询分析结果历史。
 func (s *ArticleService) ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error) {
 	return s.results.ListResults(ctx, offset, limit)
 }
 
-// validate 校验单篇提交请求的合法性。
 func (s *ArticleService) validate(req model.SubmitArticleRequest) error {
 	if strings.TrimSpace(req.Content) == "" {
 		return model.ErrEmptyContent

@@ -9,8 +9,6 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -54,6 +52,15 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		article.Status = model.ArticleReady
 		article.UpdatedAt = time.Now()
 		_ = s.articles.UpdateArticle(ctx, article)
+
+		if s.preprocessor != nil {
+			allTokens := make([]string, 0)
+			for _, st := range s.preprocessor.Prepare(article.Content) {
+				allTokens = append(allTokens, st.Tokens...)
+			}
+			s.corpus.Observe(allTokens)
+		}
+
 		successCount++
 	}
 
