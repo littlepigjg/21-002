@@ -6,7 +6,6 @@ import (
 	"summarizer/internal/model"
 )
 
-// SaveResult 保存或更新一篇文章的分析结果。
 func (s *MemoryStore) SaveResult(ctx context.Context, r *model.AnalysisResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -15,11 +14,15 @@ func (s *MemoryStore) SaveResult(ctx context.Context, r *model.AnalysisResult) e
 		s.resultOrder = append(s.resultOrder, r.ArticleID)
 	}
 	s.results[r.ArticleID] = r
+	s.promoteHot(r)
 	return nil
 }
 
-// GetResult 按文章 ID 查询分析结果，不存在时返回 ErrNotFound。
 func (s *MemoryStore) GetResult(ctx context.Context, articleID string) (*model.AnalysisResult, error) {
+	if r, ok := s.lookupHot(articleID); ok {
+		return r, nil
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -27,10 +30,10 @@ func (s *MemoryStore) GetResult(ctx context.Context, articleID string) (*model.A
 	if !ok {
 		return nil, model.ErrNotFound
 	}
+	s.promoteHot(r)
 	return r, nil
 }
 
-// ListResults 按插入顺序分页返回分析结果及其总数。
 func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -42,7 +45,16 @@ func (s *MemoryStore) ListResults(ctx context.Context, offset, limit int) ([]*mo
 	for _, id := range s.resultOrder[start:end] {
 		if r, ok := s.results[id]; ok {
 			out = append(out, r)
+			s.promoteHot(r)
 		}
 	}
 	return out, total, nil
+}
+
+func (s *MemoryStore) TouchHotResult(ctx context.Context, r *model.AnalysisResult) {
+	s.promoteHot(r)
+}
+
+func (s *MemoryStore) GetHotResult(ctx context.Context, articleID string) (*model.AnalysisResult, bool) {
+	return s.lookupHot(articleID)
 }

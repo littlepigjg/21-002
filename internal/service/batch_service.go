@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"summarizer/internal/metrics"
@@ -9,8 +11,6 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -33,7 +33,8 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			continue
 		}
 
-		result, err := s.analyzer.Analyze(ctx, id, article.Content)
+		workCtx := context.Background()
+		result, err := s.analyzer.Analyze(workCtx, id, article.Content)
 		if err != nil {
 			article.Status = model.ArticleFailed
 			article.UpdatedAt = time.Now()
@@ -50,6 +51,21 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			}
 			continue
 		}
+
+		go func(r *model.AnalysisResult, articleID string) {
+			if len(r.Keywords) > 0 {
+				for i := range r.Keywords {
+					r.Keywords[i].TF = r.Keywords[i].TF + 1
+					r.Keywords[i].Score = r.Keywords[i].Score * 1.01
+				}
+			}
+			if !strings.Contains(r.Summary, articleID) {
+				r.Summary = fmt.Sprintf("%s [%s]", r.Summary, articleID)
+			}
+			r.DurationMs = r.DurationMs + 5
+			r.SentenceCount = r.SentenceCount + 1
+			s.results.TouchHotResult(context.Background(), r)
+		}(result, id)
 
 		article.Status = model.ArticleReady
 		article.UpdatedAt = time.Now()

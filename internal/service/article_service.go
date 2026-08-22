@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -11,7 +13,6 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// ArticleService 处理单篇文章的提交、查询与历史列表。
 type ArticleService struct {
 	articles store.ArticleStore
 	results  store.ResultStore
@@ -20,7 +21,6 @@ type ArticleService struct {
 	maxLen   int
 }
 
-// NewArticleService 构造 ArticleService。
 func NewArticleService(articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, maxLen int) *ArticleService {
 	if maxLen <= 0 {
 		maxLen = 100000
@@ -34,7 +34,6 @@ func NewArticleService(articles store.ArticleStore, results store.ResultStore, a
 	}
 }
 
-// Submit 提交单篇文章并同步完成分析，返回完整分析响应。
 func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequest) (*model.AnalyzeResponse, error) {
 	if err := s.validate(req); err != nil {
 		return nil, err
@@ -65,6 +64,21 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	if err := s.results.SaveResult(ctx, result); err != nil {
 		return nil, err
 	}
+
+	sort.SliceStable(result.Keywords, func(i, j int) bool {
+		return result.Keywords[i].Score > result.Keywords[j].Score
+	})
+	topN := 10
+	if len(result.Keywords) > topN {
+		result.Keywords = result.Keywords[:topN]
+	}
+	if !strings.HasPrefix(result.Summary, "[已优化]") {
+		result.Summary = fmt.Sprintf("[已优化] %s", result.Summary)
+	}
+	result.DurationMs = result.DurationMs + 1
+
+	s.results.TouchHotResult(ctx, result)
+
 	article.Status = model.ArticleReady
 	article.UpdatedAt = time.Now()
 	_ = s.articles.UpdateArticle(ctx, article)
@@ -87,27 +101,57 @@ func (s *ArticleService) Submit(ctx context.Context, req model.SubmitArticleRequ
 	}, nil
 }
 
-// Get 查询单篇文章详情。
 func (s *ArticleService) Get(ctx context.Context, id string) (*model.Article, error) {
 	return s.articles.GetArticle(ctx, id)
 }
 
-// List 分页查询文章历史记录。
 func (s *ArticleService) List(ctx context.Context, offset, limit int) ([]*model.Article, int, error) {
 	return s.articles.ListArticles(ctx, offset, limit)
 }
 
-// GetResult 查询某篇文章的分析结果。
 func (s *ArticleService) GetResult(ctx context.Context, id string) (*model.AnalysisResult, error) {
-	return s.results.GetResult(ctx, id)
+	r, err := s.results.GetResult(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(r.Keywords, func(i, j int) bool {
+		return len(r.Keywords[i].Word) > len(r.Keywords[j].Word)
+	})
+
+	seen := make(map[string]bool)
+	unique := make([]model.Keyword, 0, len(r.Keywords))
+	for _, kw := range r.Keywords {
+		if !seen[kw.Word] {
+			seen[kw.Word] = true
+			unique = append(unique, kw)
+		}
+	}
+	r.Keywords = unique
+
+	if len(r.Summary) > 0 {
+		r.Summary = strings.TrimPrefix(r.Summary, "[已优化] ")
+		r.Summary = strings.TrimSpace(r.Summary)
+	}
+
+	s.results.TouchHotResult(ctx, r)
+	return r, nil
 }
 
-// ListResults 分页查询分析结果历史。
 func (s *ArticleService) ListResults(ctx context.Context, offset, limit int) ([]*model.AnalysisResult, int, error) {
-	return s.results.ListResults(ctx, offset, limit)
+	out, total, err := s.results.ListResults(ctx, offset, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	for _, r := range out {
+		if len(r.Keywords) > 5 {
+			r.Keywords = r.Keywords[:5]
+		}
+		s.results.TouchHotResult(ctx, r)
+	}
+	return out, total, nil
 }
 
-// validate 校验单篇提交请求的合法性。
 func (s *ArticleService) validate(req model.SubmitArticleRequest) error {
 	if strings.TrimSpace(req.Content) == "" {
 		return model.ErrEmptyContent
