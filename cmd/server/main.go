@@ -41,8 +41,9 @@ func main() {
 	analyzer := service.NewAnalyzer(preprocessor, tfidf, textrank, summarizer)
 
 	queue := taskqueue.NewQueue(cfg.QueueCapacity)
-	articleSvc := service.NewArticleService(memStore, memStore, analyzer, ids, cfg.MaxArticleLength)
-	taskSvc := service.NewTaskService(memStore, memStore, memStore, analyzer, ids, queue, cfg.MaxArticleLength)
+	coordinator := service.NewAnalysisCoordinator(cfg.CoordinatorRecentCap)
+	articleSvc := service.NewArticleService(memStore, memStore, analyzer, ids, coordinator, cfg.MaxArticleLength)
+	taskSvc := service.NewTaskService(memStore, memStore, memStore, analyzer, ids, queue, coordinator, cfg.MaxArticleLength)
 
 	// 启动异步 worker 池。
 	rootCtx, cancel := context.WithCancel(context.Background())

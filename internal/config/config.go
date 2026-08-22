@@ -21,8 +21,9 @@ type Config struct {
 	TextRankDamping    float64 // TextRank 阻尼系数
 
 	// 任务队列相关参数。
-	WorkerCount   int // 并发 worker 数量
-	QueueCapacity int // 内存任务队列容量
+	WorkerCount          int // 并发 worker 数量
+	QueueCapacity        int // 内存任务队列容量
+	CoordinatorRecentCap int // 分析协调器内最近文章容量
 
 	// HTTP 服务器超时控制。
 	ReadTimeout     time.Duration
@@ -48,6 +49,7 @@ func Default() *Config {
 		TextRankDamping:     0.85,
 		WorkerCount:         4,
 		QueueCapacity:       256,
+		CoordinatorRecentCap: 256,
 		ReadTimeout:         10 * time.Second,
 		WriteTimeout:        30 * time.Second,
 		IdleTimeout:         60 * time.Second,
@@ -72,6 +74,9 @@ func (c *Config) Validate() error {
 	}
 	if c.QueueCapacity <= 0 {
 		return fmt.Errorf("config: queue capacity must be positive")
+	}
+	if c.CoordinatorRecentCap <= 0 {
+		return fmt.Errorf("config: coordinator recent cap must be positive")
 	}
 	if c.TextRankMaxIter <= 0 {
 		return fmt.Errorf("config: textrank max iter must be positive")

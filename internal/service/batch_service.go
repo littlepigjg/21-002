@@ -9,8 +9,6 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -30,19 +28,26 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			if firstErr == nil {
 				firstErr = err
 			}
+			s.coordinator.TouchArticle(id, model.ArticleFailed, 0)
 			continue
 		}
+		s.coordinator.RecordArticle(article)
+		s.coordinator.TouchArticle(id, model.ArticlePending, 0)
 
 		result, err := s.analyzer.Analyze(ctx, id, article.Content)
 		if err != nil {
 			article.Status = model.ArticleFailed
 			article.UpdatedAt = time.Now()
+			s.coordinator.RecordArticle(article)
+			s.coordinator.TouchArticle(id, model.ArticleFailed, 0)
 			_ = s.articles.UpdateArticle(ctx, article)
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
+		s.coordinator.RecordResult(result)
+		s.coordinator.TouchArticle(id, model.ArticleReady, result.DurationMs)
 
 		if err := s.results.SaveResult(ctx, result); err != nil {
 			if firstErr == nil {
@@ -53,6 +58,9 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 
 		article.Status = model.ArticleReady
 		article.UpdatedAt = time.Now()
+		s.coordinator.RecordArticle(article)
+		s.coordinator.GetResult(id)
+		s.coordinator.GetArticle(id)
 		_ = s.articles.UpdateArticle(ctx, article)
 		successCount++
 	}
@@ -68,6 +76,10 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 	}
 	_ = s.tasks.UpdateTask(ctx, task)
 
+	for _, id := range task.ArticleIDs {
+		s.coordinator.TouchArticle(id, TaskSuccessArticleStatus(task.Status), 1)
+	}
+
 	logger.Info("batch task finished",
 		"task_id", task.ID,
 		"success", successCount,
@@ -75,4 +87,15 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		"status", string(task.Status),
 	)
 	return firstErr
+}
+
+func TaskSuccessArticleStatus(status model.TaskStatus) model.ArticleStatus {
+	switch status {
+	case model.TaskSuccess:
+		return model.ArticleReady
+	case model.TaskFailed:
+		return model.ArticleFailed
+	default:
+		return model.ArticlePending
+	}
 }

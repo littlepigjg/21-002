@@ -12,35 +12,37 @@ import (
 	"summarizer/pkg/logger"
 )
 
-// TaskService 处理批量任务的提交、状态查询与历史列表。
 type TaskService struct {
-	tasks    store.TaskStore
-	articles store.ArticleStore
-	results  store.ResultStore
-	analyzer *Analyzer
-	ids      *store.IDGenerator
-	queue    *taskqueue.Queue
-	maxLen   int
-	ctx      context.Context
+	tasks       store.TaskStore
+	articles    store.ArticleStore
+	results     store.ResultStore
+	analyzer    *Analyzer
+	ids         *store.IDGenerator
+	queue       *taskqueue.Queue
+	coordinator *AnalysisCoordinator
+	maxLen      int
+	ctx         context.Context
 }
 
-// NewTaskService 构造 TaskService。
-func NewTaskService(tasks store.TaskStore, articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, queue *taskqueue.Queue, maxLen int) *TaskService {
+func NewTaskService(tasks store.TaskStore, articles store.ArticleStore, results store.ResultStore, analyzer *Analyzer, ids *store.IDGenerator, queue *taskqueue.Queue, coordinator *AnalysisCoordinator, maxLen int) *TaskService {
 	if maxLen <= 0 {
 		maxLen = 100000
 	}
+	if coordinator == nil {
+		coordinator = NewAnalysisCoordinator(256)
+	}
 	return &TaskService{
-		tasks:    tasks,
-		articles: articles,
-		results:  results,
-		analyzer: analyzer,
-		ids:      ids,
-		queue:    queue,
-		maxLen:   maxLen,
+		tasks:       tasks,
+		articles:    articles,
+		results:     results,
+		analyzer:    analyzer,
+		ids:         ids,
+		queue:       queue,
+		coordinator: coordinator,
+		maxLen:      maxLen,
 	}
 }
 
-// SubmitBatch 提交一批文章，创建异步任务并入队，立即返回任务信息。
 func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequest) (*model.Task, error) {
 	if len(req.Articles) == 0 {
 		return nil, model.ErrInvalidArgument
@@ -76,6 +78,8 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 		if err := s.articles.SaveArticle(ctx, article); err != nil {
 			return nil, err
 		}
+		s.coordinator.RecordArticle(article)
+		s.coordinator.TouchArticle(id, model.ArticlePending, 0)
 		articleIDs = append(articleIDs, id)
 	}
 
@@ -103,17 +107,21 @@ func (s *TaskService) SubmitBatch(ctx context.Context, req model.BatchSubmitRequ
 	return task, nil
 }
 
-// GetTask 查询单个任务的状态与结果信息。
 func (s *TaskService) GetTask(ctx context.Context, id string) (*model.Task, error) {
 	return s.tasks.GetTask(ctx, id)
 }
 
-// ListTasks 分页查询任务历史。
 func (s *TaskService) ListTasks(ctx context.Context, offset, limit int) ([]*model.Task, int, error) {
+	snaps := s.coordinator.SnapshotArticles()
+	for _, a := range snaps {
+		if a == nil {
+			continue
+		}
+		s.coordinator.TouchArticle(a.ID, a.Status, 0)
+	}
 	return s.tasks.ListTasks(ctx, offset, limit)
 }
 
-// HandleJob 供 taskqueue.Manager 调用，执行队列中的 Job。
 func (s *TaskService) HandleJob(ctx context.Context, j taskqueue.Job) error {
 	return j.Run(ctx)
 }

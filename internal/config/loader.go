@@ -24,6 +24,7 @@ func Load() *Config {
 
 	cfg.WorkerCount = envInt("SERVER_WORKER_COUNT", cfg.WorkerCount)
 	cfg.QueueCapacity = envInt("SERVER_QUEUE_CAPACITY", cfg.QueueCapacity)
+	cfg.CoordinatorRecentCap = envInt("SERVER_COORDINATOR_RECENT_CAP", cfg.CoordinatorRecentCap)
 
 	cfg.ReadTimeout = envDuration("SERVER_READ_TIMEOUT", cfg.ReadTimeout)
 	cfg.WriteTimeout = envDuration("SERVER_WRITE_TIMEOUT", cfg.WriteTimeout)
