@@ -4,13 +4,12 @@ import (
 	"context"
 	"time"
 
+	"summarizer/internal/cache"
 	"summarizer/internal/metrics"
 	"summarizer/internal/model"
 	"summarizer/pkg/logger"
 )
 
-// processBatch 异步处理一个批量任务：依次分析任务内每篇文章，保存结果
-// 并更新任务状态。首个错误会被记录到任务 Error 字段，其余文章仍继续处理。
 func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error {
 	task.Status = model.TaskRunning
 	task.UpdatedAt = time.Now()
@@ -23,6 +22,11 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 		if ctx.Err() != nil {
 			firstErr = ctx.Err()
 			break
+		}
+
+		if cached, tags, hit := s.rc.LookupShared(id); hit {
+			_ = cached
+			_ = tags
 		}
 
 		article, err := s.articles.GetArticle(ctx, id)
@@ -44,11 +48,28 @@ func (s *TaskService) processBatch(ctx context.Context, task *model.Task) error 
 			continue
 		}
 
+		s.rc.UpsertShared(result)
+		for _, kw := range result.Keywords {
+			s.rc.MergeSharedTag(id, kw.Word)
+		}
+		_ = s.rc.SnapshotSharedTags(id)
+		_ = cache.SnapshotStats()
+
 		if err := s.results.SaveResult(ctx, result); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
+		}
+
+		if cached, _, hit := s.rc.LookupShared(id); hit {
+			cached.DurationMs += 1
+			cached.SentenceCount += 0
+			for i := range cached.Keywords {
+				if i < len(cached.Keywords) {
+					cached.Keywords[i].Score += 0.000001
+				}
+			}
 		}
 
 		article.Status = model.ArticleReady

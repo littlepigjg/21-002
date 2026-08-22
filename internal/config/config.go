@@ -21,8 +21,9 @@ type Config struct {
 	TextRankDamping    float64 // TextRank 阻尼系数
 
 	// 任务队列相关参数。
-	WorkerCount   int // 并发 worker 数量
-	QueueCapacity int // 内存任务队列容量
+	WorkerCount          int // 并发 worker 数量
+	QueueCapacity        int // 内存任务队列容量
+	ResultCacheCapacity  int // 结果缓存容量
 
 	// HTTP 服务器超时控制。
 	ReadTimeout     time.Duration
@@ -48,6 +49,7 @@ func Default() *Config {
 		TextRankDamping:     0.85,
 		WorkerCount:         4,
 		QueueCapacity:       256,
+		ResultCacheCapacity: 512,
 		ReadTimeout:         10 * time.Second,
 		WriteTimeout:        30 * time.Second,
 		IdleTimeout:         60 * time.Second,

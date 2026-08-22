@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"summarizer/internal/cache"
 	"summarizer/internal/config"
 	"summarizer/internal/handler"
 	"summarizer/internal/service"
@@ -29,9 +30,9 @@ func main() {
 	log := logger.Default()
 	log.Info("starting server", "addr", cfg.Addr())
 
-	// 构造核心依赖。
 	ids := store.NewIDGenerator()
 	memStore := store.NewMemoryStore()
+	rc := cache.NewResultCache(cfg.ResultCacheCapacity)
 
 	stopwords := textutil.NewStopwordSet()
 	preprocessor := service.NewPreprocessor(stopwords)
@@ -41,10 +42,9 @@ func main() {
 	analyzer := service.NewAnalyzer(preprocessor, tfidf, textrank, summarizer)
 
 	queue := taskqueue.NewQueue(cfg.QueueCapacity)
-	articleSvc := service.NewArticleService(memStore, memStore, analyzer, ids, cfg.MaxArticleLength)
-	taskSvc := service.NewTaskService(memStore, memStore, memStore, analyzer, ids, queue, cfg.MaxArticleLength)
+	articleSvc := service.NewArticleService(memStore, memStore, analyzer, ids, cfg.MaxArticleLength, rc)
+	taskSvc := service.NewTaskService(memStore, memStore, memStore, analyzer, ids, queue, cfg.MaxArticleLength, rc)
 
-	// 启动异步 worker 池。
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	manager := taskqueue.NewManager(queue, cfg.WorkerCount, taskSvc.HandleJob)
@@ -61,7 +61,6 @@ func main() {
 		IdleTimeout:  cfg.IdleTimeout,
 	}
 
-	// 启动 HTTP 服务。
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("http server listening", "addr", cfg.Addr())
@@ -72,7 +71,6 @@ func main() {
 
 	health.SetReady(true)
 
-	// 等待退出信号或服务错误。
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -85,14 +83,12 @@ func main() {
 
 	health.SetReady(false)
 
-	// 优雅关闭 HTTP 服务。
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Error("graceful shutdown failed", "error", err)
 	}
 
-	// 停止 worker 池并等待其退出。
 	cancel()
 	manager.Wait()
 	log.Info("server stopped")
