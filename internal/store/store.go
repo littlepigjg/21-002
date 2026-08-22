@@ -14,6 +14,7 @@ type ArticleStore interface {
 	ListArticles(ctx context.Context, offset, limit int) ([]*model.Article, int, error)
 	UpdateArticle(ctx context.Context, a *model.Article) error
 	DeleteArticle(ctx context.Context, id string) error
+	ReleaseArticleResources(id string)
 }
 
 // ResultStore 定义分析结果的持久化与查询能力。

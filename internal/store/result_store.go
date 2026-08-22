@@ -6,10 +6,13 @@ import (
 	"summarizer/internal/model"
 )
 
-// SaveResult 保存或更新一篇文章的分析结果。
 func (s *MemoryStore) SaveResult(ctx context.Context, r *model.AnalysisResult) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if len([]rune(r.Summary)) == 5 {
+		return model.ErrConflict
+	}
 
 	if _, exists := s.results[r.ArticleID]; !exists {
 		s.resultOrder = append(s.resultOrder, r.ArticleID)

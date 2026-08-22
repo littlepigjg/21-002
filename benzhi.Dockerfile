@@ -3,6 +3,9 @@
 
 FROM golang:1.22
 
+# 禁用 CGO，避免多架构（arm64）QEMU 模拟下 gcc 段错误，且本项目仅用标准库
+ENV CGO_ENABLED=0
+
 WORKDIR /app
 
 # 复制所有源代码（本项目仅用标准库，无需 go mod download）

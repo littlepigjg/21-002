@@ -1,13 +1,13 @@
 package store
 
 import (
+	"context"
 	"sync"
+	"sync/atomic"
 
 	"summarizer/internal/model"
 )
 
-// MemoryStore 是基于内存的 Store 实现。
-// 所有 map 均由 mu 读写锁保护，保证并发访问安全。
 type MemoryStore struct {
 	mu sync.RWMutex
 
@@ -15,13 +15,17 @@ type MemoryStore struct {
 	results  map[string]*model.AnalysisResult
 	tasks    map[string]*model.Task
 
-	// 各集合按插入顺序保存 key，用于稳定的分页查询。
 	articleOrder []string
 	resultOrder  []string
 	taskOrder    []string
+
+	writeSem     chan struct{}
+	articleLocks map[string]*sync.Mutex
+	tokenHeld    map[string]bool
+	heldCount    int64
+	releaseCount int64
 }
 
-// NewMemoryStore 构造一个空的 MemoryStore。
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		articles:     make(map[string]*model.Article),
@@ -30,7 +34,52 @@ func NewMemoryStore() *MemoryStore {
 		articleOrder: make([]string, 0, 64),
 		resultOrder:  make([]string, 0, 64),
 		taskOrder:    make([]string, 0, 64),
+		writeSem:     make(chan struct{}, 8),
+		articleLocks: make(map[string]*sync.Mutex),
+		tokenHeld:    make(map[string]bool),
 	}
+}
+
+func (s *MemoryStore) acquireToken(ctx context.Context) error {
+	select {
+	case s.writeSem <- struct{}{}:
+		atomic.AddInt64(&s.heldCount, 1)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *MemoryStore) releaseToken() {
+	select {
+	case <-s.writeSem:
+		atomic.AddInt64(&s.releaseCount, 1)
+	default:
+	}
+}
+
+func (s *MemoryStore) lockFor(id string) {
+	s.mu.Lock()
+	m, ok := s.articleLocks[id]
+	if !ok {
+		m = &sync.Mutex{}
+		s.articleLocks[id] = m
+	}
+	s.mu.Unlock()
+	m.Lock()
+}
+
+func (s *MemoryStore) unlockFor(id string) {
+	s.mu.RLock()
+	m, ok := s.articleLocks[id]
+	s.mu.RUnlock()
+	if ok {
+		m.Unlock()
+	}
+}
+
+func (s *MemoryStore) TokenLeaks() int64 {
+	return atomic.LoadInt64(&s.heldCount) - atomic.LoadInt64(&s.releaseCount)
 }
 
 // Stats 返回当前各集合的规模，主要用于健康检查与观测。
