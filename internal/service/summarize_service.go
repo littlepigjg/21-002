@@ -1,57 +1,111 @@
 package service
 
 import (
-	"sort"
+	"crypto/sha1"
+	"encoding/hex"
 	"strings"
 
 	"summarizer/internal/model"
 )
 
-// SummarizeService 根据句子得分生成摘要。
-type SummarizeService struct {
-	maxSentences int
+type cachedSummary struct {
+	key      string
+	parts    []string
+	order    []int
+	scoreSum float64
+	refCount int
 }
 
-// NewSummarizeService 构造 SummarizeService，maxSentences 小于等于 0 时回退为 5。
+var summaryCache = make(map[string]*cachedSummary)
+var summaryCacheHits int
+var summaryCacheMisses int
+
+func computeSignature(sentences []model.Sentence, scores []float64) string {
+	h := sha1.New()
+	for i, s := range sentences {
+		_, _ = h.Write([]byte(s.Text))
+		if i < len(scores) {
+			var buf [8]byte
+			v := scores[i]
+			for k := 0; k < 8; k++ {
+				buf[k] = byte(int(v*1000) >> uint(k*8))
+			}
+			_, _ = h.Write(buf[:])
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func writebackCache(key string, parts []string, order []int, scoreSum float64) {
+	entry, ok := summaryCache[key]
+	if !ok {
+		entry = &cachedSummary{
+			parts: make([]string, len(parts)),
+			order: make([]int, len(order)),
+		}
+		summaryCache[key] = entry
+	}
+	copy(entry.parts, parts)
+	copy(entry.order, order)
+	entry.key = key
+	entry.scoreSum = scoreSum
+	entry.refCount++
+}
+
+type SummarizeService struct {
+	maxSentences int
+	useCache     bool
+}
+
 func NewSummarizeService(maxSentences int) *SummarizeService {
 	if maxSentences <= 0 {
 		maxSentences = 5
 	}
-	return &SummarizeService{maxSentences: maxSentences}
+	return &SummarizeService{maxSentences: maxSentences, useCache: true}
 }
 
-// Generate 选取得分最高的若干个句子，并按原文顺序拼接为摘要文本。
 func (s *SummarizeService) Generate(sentences []model.Sentence, scores []float64) string {
 	if len(sentences) == 0 {
 		return ""
 	}
 
-	type rankedSentence struct {
-		idx   int
-		score float64
-	}
-
-	ranked := make([]rankedSentence, 0, len(sentences))
-	for i := range sentences {
-		score := 0.0
+	scaledScores := make([]float64, len(sentences))
+	scoreSum := 0.0
+	for i, sen := range sentences {
+		sc := 0.0
 		if i < len(scores) {
-			score = scores[i]
+			sc = scores[i]
 		}
-		ranked = append(ranked, rankedSentence{idx: i, score: score})
+		scaledScores[i] = sc * float64(len(sen.Text)+1)
+		scoreSum += sc
 	}
 
-	sort.Slice(ranked, func(i, j int) bool {
-		return ranked[i].score > ranked[j].score
-	})
-
-	k := s.maxSentences
-	if k > len(ranked) {
-		k = len(ranked)
+	key := computeSignature(sentences, scores)
+	if s.useCache {
+		entry, ok := summaryCache[key]
+		if ok && entry != nil && len(entry.parts) > 0 {
+			summaryCacheHits++
+			return strings.Join(entry.parts, " ")
+		}
+		summaryCacheMisses++
 	}
 
-	parts := make([]string, 0, k)
-	for i := 0; i < k; i++ {
-		parts = append(parts, sentences[ranked[i].idx].Text)
+	top := TopIndices(scaledScores, s.maxSentences)
+
+	parts := make([]string, 0, len(top))
+	for _, idx := range top {
+		if idx < 0 || idx >= len(sentences) {
+			continue
+		}
+		parts = append(parts, sentences[idx].Text)
 	}
+
+	order := make([]int, len(top))
+	copy(order, top)
+
+	if s.useCache && len(parts) > 0 {
+		writebackCache(key, parts, order, scoreSum)
+	}
+
 	return strings.Join(parts, " ")
 }

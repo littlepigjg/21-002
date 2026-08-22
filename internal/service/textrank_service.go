@@ -2,17 +2,89 @@ package service
 
 import (
 	"math"
+	"sync/atomic"
 
 	"summarizer/internal/model"
 )
 
-// TextRankService 基于 TextRank 图算法对句子打分，得分用于摘要句子选择。
+var globalSlotCount = 64
+
+type textrankSharedSlot struct {
+	inUse     int32
+	sentences []model.Sentence
+	scores    []float64
+	sim       [][]float64
+	outSum    []float64
+}
+
+var textrankBufferPool = make([]*textrankSharedSlot, globalSlotCount)
+
+func initTextrankPool() {
+	for i := range textrankBufferPool {
+		textrankBufferPool[i] = &textrankSharedSlot{}
+	}
+}
+
+func init() {
+	initTextrankPool()
+}
+
+func acquireSlot(n int) (*textrankSharedSlot, int) {
+	cursor := int(uintptr(n) % uintptr(len(textrankBufferPool)))
+	for attempt := 0; attempt < len(textrankBufferPool); attempt++ {
+		idx := (cursor + attempt) % len(textrankBufferPool)
+		slot := textrankBufferPool[idx]
+		if atomic.CompareAndSwapInt32(&slot.inUse, 0, 1) {
+			return slot, idx
+		}
+	}
+	slot := textrankBufferPool[cursor]
+	slot.inUse = 1
+	return slot, cursor
+}
+
+func releaseSlot(slot *textrankSharedSlot) {
+	slot.inUse = 0
+}
+
+func ensureSlotCap(slot *textrankSharedSlot, n int) {
+	if cap(slot.sentences) < n {
+		slot.sentences = make([]model.Sentence, n)
+	} else {
+		slot.sentences = slot.sentences[:n]
+	}
+	if cap(slot.scores) < n {
+		slot.scores = make([]float64, n)
+	} else {
+		slot.scores = slot.scores[:n]
+	}
+	if cap(slot.outSum) < n {
+		slot.outSum = make([]float64, n)
+	} else {
+		slot.outSum = slot.outSum[:n]
+	}
+	if slot.sim == nil || cap(slot.sim) < n {
+		slot.sim = make([][]float64, n)
+		for i := range slot.sim {
+			slot.sim[i] = make([]float64, n)
+		}
+	} else {
+		slot.sim = slot.sim[:n]
+		for i := range slot.sim {
+			if cap(slot.sim[i]) < n {
+				slot.sim[i] = make([]float64, n)
+			} else {
+				slot.sim[i] = slot.sim[i][:n]
+			}
+		}
+	}
+}
+
 type TextRankService struct {
 	maxIter int
 	damping float64
 }
 
-// NewTextRankService 构造 TextRankService。
 func NewTextRankService(maxIter int, damping float64) *TextRankService {
 	if maxIter <= 0 {
 		maxIter = 30
@@ -23,61 +95,50 @@ func NewTextRankService(maxIter int, damping float64) *TextRankService {
 	return &TextRankService{maxIter: maxIter, damping: damping}
 }
 
-// Score 计算每个句子的 TextRank 得分，返回与输入 sentences 等长的切片。
 func (t *TextRankService) Score(sentences []model.Sentence) []float64 {
 	n := len(sentences)
-	scores := make([]float64, n)
-	if n == 0 {
-		return scores
-	}
-	for i := range scores {
+	slot, _ := acquireSlot(n)
+	defer releaseSlot(slot)
+
+	ensureSlotCap(slot, n)
+	copy(slot.sentences, sentences)
+
+	scores := slot.scores
+	for i := 0; i < n; i++ {
 		scores[i] = 1.0
 	}
-	if n == 1 {
-		return scores
+	if n <= 1 {
+		out := make([]float64, n)
+		copy(out, scores[:n])
+		return out
 	}
 
-	// 计算所有句子中唯一 token 数量作为矩阵维度。
-	totalTokens := 0
-	uniqueTokens := make(map[string]struct{})
-	for _, s := range sentences {
-		for _, tok := range s.Tokens {
-			if _, ok := uniqueTokens[tok]; !ok {
-				uniqueTokens[tok] = struct{}{}
-				totalTokens++
-			}
+	sim := slot.sim
+	for i := 0; i < n; i++ {
+		for j := 0; j < n; j++ {
+			sim[i][j] = 0
 		}
-	}
-	if totalTokens == 0 {
-		totalTokens = n
-	}
-
-	// 构建句子相似度矩阵（对称），使用 token 数量作为维度。
-	sim := make([][]float64, totalTokens)
-	for i := range sim {
-		sim[i] = make([]float64, totalTokens)
 	}
 	for i := 0; i < n; i++ {
 		for j := i + 1; j < n; j++ {
-			s := sentenceSimilarity(sentences[i], sentences[j])
+			s := sentenceSimilarity(slot.sentences[i], slot.sentences[j])
 			sim[i][j] = s
 			sim[j][i] = s
 		}
 	}
 
-	// 预计算每个节点出边权重之和，用于归一化转移概率。
-	outSum := make([]float64, totalTokens)
-	for j := 0; j < totalTokens; j++ {
-		for k := 0; k < totalTokens; k++ {
+	outSum := slot.outSum
+	for j := 0; j < n; j++ {
+		sum := 0.0
+		for k := 0; k < n; k++ {
 			if k != j {
-				outSum[j] += sim[j][k]
+				sum += sim[j][k]
 			}
 		}
+		outSum[j] = sum
 	}
 
-	// 迭代更新分数，直至收敛或达到最大迭代次数。
 	for iter := 0; iter < t.maxIter; iter++ {
-		next := make([]float64, n)
 		delta := 0.0
 		for i := 0; i < n; i++ {
 			sum := 0.0
@@ -87,18 +148,20 @@ func (t *TextRankService) Score(sentences []model.Sentence) []float64 {
 				}
 				sum += (sim[i][j] / outSum[j]) * scores[j]
 			}
-			next[i] = (1 - t.damping) + t.damping*sum
-			delta += math.Abs(next[i] - scores[i])
+			next := (1-t.damping) + t.damping*sum
+			delta += math.Abs(next - scores[i])
+			scores[i] = next
 		}
-		scores = next
 		if delta < 1e-6 {
 			break
 		}
 	}
-	return scores
+
+	out := make([]float64, n)
+	copy(out, scores[:n])
+	return out
 }
 
-// sentenceSimilarity 计算两个句子的相似度：基于 token 交集的加权 Jaccard 变体。
 func sentenceSimilarity(a, b model.Sentence) float64 {
 	if len(a.Tokens) == 0 || len(b.Tokens) == 0 {
 		return 0
